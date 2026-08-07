@@ -6,15 +6,21 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/text/transform"
 
+	"reasonix/internal/imageopt"
 	fileenc "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/tool"
 )
@@ -22,6 +28,20 @@ import (
 const (
 	readFileBinaryPeek   = 8 * 1024   // bytes scanned for NUL before reading further
 	readFileDetectSample = 256 * 1024 // bytes sampled for encoding detection before streaming
+	// readImageMaxOutputBytes bounds the model-facing text of an image read
+	// (header + OCR). It sits under the agent's maxToolOutputBytes so the OCR
+	// transcript is never mangled by head+tail truncation.
+	readImageMaxOutputBytes = 30 * 1024
+)
+
+// Image/OCR knobs, mirroring jcode's env-controllable clamp+OCR:
+//   - REASONIX_IMAGE_JPEG_QUALITY — JPEG quality for re-encoding (default 80)
+//   - REASONIX_IMAGE_OCR       — "0" disables OCR entirely
+//   - REASONIX_IMAGE_OCR_LANGS — tesseract language list (default "rus+eng")
+const (
+	reasonixImageQualityEnv  = "REASONIX_IMAGE_JPEG_QUALITY"
+	reasonixImageOCREnv      = "REASONIX_IMAGE_OCR"
+	reasonixImageOCRLangsEnv = "REASONIX_IMAGE_OCR_LANGS"
 )
 
 func init() { tool.RegisterBuiltin(readFile{}) }
@@ -48,7 +68,7 @@ const (
 func (readFile) Name() string { return "read_file" }
 
 func (readFile) Description() string {
-	return "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer."
+	return "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer. Raster images (PNG/JPEG/GIF/WebP) are handled specially: the image is clamped to 1568px and re-encoded as JPEG (quality 80), and tesseract OCR (rus+eng) is appended as text so text-only models can read screenshots."
 }
 
 func (readFile) Schema() json.RawMessage {
@@ -206,6 +226,153 @@ func (r readFile) Execute(ctx context.Context, args json.RawMessage) (string, er
 		return r.scan(transform.NewReader(src, dec), p.Offset, p.Limit)
 	}
 	return r.scan(src, p.Offset, p.Limit)
+}
+
+// ExecuteWithImages extends Execute for raster images: it returns the same text
+// Execute would, but for image files the text carries the [image: …] placeholder,
+// a compression note, and an OCR transcript (so text-only models like DeepSeek
+// still see the on-screen content), while the clamped/re-encoded image is
+// returned as a data URL for vision-capable providers. Text files fall through
+// to Execute's behavior with no images, keeping the text path byte-identical.
+func (r readFile) ExecuteWithImages(ctx context.Context, args json.RawMessage) (string, []string, error) {
+	var p struct {
+		Path   string `json:"path"`
+		Offset int    `json:"offset,omitempty"`
+		Limit  int    `json:"limit,omitempty"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", nil, fmt.Errorf("invalid args: %w", err)
+	}
+	if p.Path == "" {
+		return "", nil, fmt.Errorf("path is required")
+	}
+	rp := resolveReadablePath(r.workDir, p.Path, r.paths)
+	p.Path = rp.Path
+	displayPath := rp.DisplayPath
+	if confineRead(r.forbidRoots, p.Path) {
+		err := &os.PathError{Op: "open", Path: p.Path, Err: os.ErrNotExist}
+		if rp.External {
+			return "", nil, fmt.Errorf("read %s: %s", displayPath, rp.ErrorText(err))
+		}
+		return "", nil, err
+	}
+	// Directories and the host overlay (unsaved editor buffers) are never
+	// images — let Execute produce its canonical messages for those.
+	if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
+		return "", nil, fmt.Errorf("%s is a directory, not a file — use the ls tool to list it, or read a specific file inside it", displayPath)
+	}
+	f, err := os.Open(p.Path)
+	if err != nil {
+		if rp.External {
+			return "", nil, fmt.Errorf("read %s: %s", displayPath, rp.ErrorText(err))
+		}
+		return "", nil, fmt.Errorf("read %s: %w", displayPath, err)
+	}
+	defer f.Close()
+
+	// Peek enough to sniff the format; raster images are handled here, anything
+	// else goes through the text pipeline below.
+	peek := make([]byte, readFileBinaryPeek)
+	pn, _ := io.ReadFull(f, peek)
+	peek = peek[:pn]
+	if mime := http.DetectContentType(peek); isRasterMime(mime) {
+		return r.readImage(ctx, displayPath, f, peek, mime)
+	}
+	text, err := r.Execute(ctx, args)
+	return text, nil, err
+}
+
+// readImage handles a raster image read: clamps/re-encodes via
+// imageopt.CompressForRead, appends an OCR transcript for text-only models,
+// and returns the compressed payload as a data URL for vision providers.
+// Mirrors jcode's read-time clamp+OCR so multica cards behave identically
+// across runtimes.
+func (r readFile) readImage(ctx context.Context, displayPath string, f *os.File, peek []byte, mime string) (string, []string, error) {
+	rest, err := io.ReadAll(f)
+	if err != nil {
+		return "", nil, fmt.Errorf("read %s: %w", displayPath, err)
+	}
+	raw := append(peek, rest...)
+	data, outMime, w, h := imageopt.CompressForRead(raw, mime, imageQuality())
+	img := "data:" + outMime + ";base64," + base64.StdEncoding.EncodeToString(data)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[image: %s] %s (%d×%d, %.1f KB", outMime, displayPath, w, h, float64(len(data))/1024)
+	if len(data) != len(raw) || outMime != mime {
+		fmt.Fprintf(&b, ", compressed from %.1f KB %s", float64(len(raw))/1024, mime)
+	}
+	b.WriteString(")\n")
+	if txt := readImageOCR(ctx, raw); txt != "" {
+		fmt.Fprintf(&b, "OCR (%s):\n%s\n", imageOCRLangs(), txt)
+	} else {
+		b.WriteString("(OCR пусто или недоступно — text-only модель не видит картинку; при необходимости сними скриншот и используй ocr.sh)\n")
+	}
+	return truncateImageText(b.String()), []string{img}, nil
+}
+
+// readImageOCR runs tesseract over the raw image bytes (rus+eng by default)
+// with a hard time budget; any failure yields "" so a read never fails because
+// OCR is unavailable or slow.
+func readImageOCR(ctx context.Context, raw []byte) string {
+	if os.Getenv(reasonixImageOCREnv) == "0" {
+		return ""
+	}
+	tmp, err := os.CreateTemp("", "reasonix-ocr-*")
+	if err != nil {
+		return ""
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return ""
+	}
+	if err := tmp.Close(); err != nil {
+		return ""
+	}
+	ctxT, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctxT, "tesseract", name, "stdout", "-l", imageOCRLangs())
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func imageOCRLangs() string {
+	if l := os.Getenv(reasonixImageOCRLangsEnv); l != "" {
+		return l
+	}
+	return "rus+eng"
+}
+
+func imageQuality() int {
+	if q := os.Getenv(reasonixImageQualityEnv); q != "" {
+		if n, err := strconv.Atoi(q); err == nil {
+			return n
+		}
+	}
+	return 80
+}
+
+func isRasterMime(mime string) bool {
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	}
+	return false
+}
+
+func truncateImageText(s string) string {
+	if len(s) <= readImageMaxOutputBytes {
+		return s
+	}
+	head := s[:readImageMaxOutputBytes/2]
+	tail := s[len(s)-readImageMaxOutputBytes/4:]
+	return head + fmt.Sprintf("\n...[OCR text truncated: %d bytes total]...\n", len(s)) + tail
 }
 
 // scan reads lines from src and returns the formatted output with line numbers.
