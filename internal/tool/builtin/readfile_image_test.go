@@ -144,6 +144,14 @@ func TestReadFileImageEnvKnobs(t *testing.T) {
 	if l := imageOCRLangs(); l != "eng" {
 		t.Fatalf("imageOCRLangs: got %s, want eng", l)
 	}
+	t.Setenv(reasonixImageOCRPSMEnv, "6")
+	if p := imageOCRPSM(); p != "6" {
+		t.Fatalf("imageOCRPSM: got %s, want 6", p)
+	}
+	t.Setenv(reasonixImageOCRPSMEnv, "")
+	if p := imageOCRPSM(); p != "11" {
+		t.Fatalf("imageOCRPSM default: got %s, want 11", p)
+	}
 	// Kill-switch short-circuits before touching tesseract.
 	t.Setenv(reasonixImageOCREnv, "0")
 	if s := readImageOCR(context.Background(), []byte("junk")); s != "" {

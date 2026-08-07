@@ -38,10 +38,13 @@ const (
 //   - REASONIX_IMAGE_JPEG_QUALITY — JPEG quality for re-encoding (default 80)
 //   - REASONIX_IMAGE_OCR       — "0" disables OCR entirely
 //   - REASONIX_IMAGE_OCR_LANGS — tesseract language list (default "rus+eng")
+//   - REASONIX_IMAGE_OCR_PSM   — tesseract page-segmentation mode (default 11:
+//     sparse text, tuned for icon-grid screenshots per NTL-524 experiment)
 const (
 	reasonixImageQualityEnv  = "REASONIX_IMAGE_JPEG_QUALITY"
 	reasonixImageOCREnv      = "REASONIX_IMAGE_OCR"
 	reasonixImageOCRLangsEnv = "REASONIX_IMAGE_OCR_LANGS"
+	reasonixImageOCRPSMEnv   = "REASONIX_IMAGE_OCR_PSM"
 )
 
 func init() { tool.RegisterBuiltin(readFile{}) }
@@ -332,7 +335,7 @@ func readImageOCR(ctx context.Context, raw []byte) string {
 	}
 	ctxT, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctxT, "tesseract", name, "stdout", "-l", imageOCRLangs())
+	cmd := exec.CommandContext(ctxT, "tesseract", name, "stdout", "-l", imageOCRLangs(), "--psm", imageOCRPSM(), "-c", "preserve_interword_spaces=1")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = io.Discard
@@ -347,6 +350,17 @@ func imageOCRLangs() string {
 		return l
 	}
 	return "rus+eng"
+}
+
+// imageOCRPSM returns the tesseract page-segmentation mode: 11 (sparse text)
+// by default — tuned for icon-grid phone screenshots per the NTL-524
+// experiment — overridable via REASONIX_IMAGE_OCR_PSM (e.g. "3" for dense
+// documents, "6" for a uniform text block).
+func imageOCRPSM() string {
+	if p := os.Getenv(reasonixImageOCRPSMEnv); p != "" {
+		return p
+	}
+	return "11"
 }
 
 func imageQuality() int {
