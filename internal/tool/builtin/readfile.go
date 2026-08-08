@@ -12,16 +12,14 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/text/transform"
 
-	"reasonix/internal/imageopt"
 	fileenc "reasonix/internal/fileutil/encoding"
+	"reasonix/internal/imageopt"
 	"reasonix/internal/tool"
 )
 
@@ -29,22 +27,15 @@ const (
 	readFileBinaryPeek   = 8 * 1024   // bytes scanned for NUL before reading further
 	readFileDetectSample = 256 * 1024 // bytes sampled for encoding detection before streaming
 	// readImageMaxOutputBytes bounds the model-facing text of an image read
-	// (header + OCR). It sits under the agent's maxToolOutputBytes so the OCR
+	// (header). It sits under the agent's maxToolOutputBytes so the image
 	// transcript is never mangled by head+tail truncation.
 	readImageMaxOutputBytes = 30 * 1024
 )
 
-// Image/OCR knobs, mirroring jcode's env-controllable clamp+OCR:
+// Image knob, mirroring jcode's env-controllable clamp:
 //   - REASONIX_IMAGE_JPEG_QUALITY — JPEG quality for re-encoding (default 80)
-//   - REASONIX_IMAGE_OCR       — "0" disables OCR entirely
-//   - REASONIX_IMAGE_OCR_LANGS — tesseract language list (default "rus+eng")
-//   - REASONIX_IMAGE_OCR_PSM   — tesseract page-segmentation mode (default 11:
-//     sparse text, tuned for icon-grid screenshots per NTL-524 experiment)
 const (
-	reasonixImageQualityEnv  = "REASONIX_IMAGE_JPEG_QUALITY"
-	reasonixImageOCREnv      = "REASONIX_IMAGE_OCR"
-	reasonixImageOCRLangsEnv = "REASONIX_IMAGE_OCR_LANGS"
-	reasonixImageOCRPSMEnv   = "REASONIX_IMAGE_OCR_PSM"
+	reasonixImageQualityEnv = "REASONIX_IMAGE_JPEG_QUALITY"
 )
 
 func init() { tool.RegisterBuiltin(readFile{}) }
@@ -71,7 +62,7 @@ const (
 func (readFile) Name() string { return "read_file" }
 
 func (readFile) Description() string {
-	return "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer. Raster images (PNG/JPEG/GIF/WebP) are handled specially: the image is clamped to 1568px and re-encoded as JPEG (quality 80), and tesseract OCR (rus+eng) is appended as text so text-only models can read screenshots."
+	return "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer. Raster images (PNG/JPEG/GIF/WebP) are handled specially: the image is clamped to 1568px and re-encoded as JPEG (quality 80)."
 }
 
 func (readFile) Schema() json.RawMessage {
@@ -305,62 +296,7 @@ func (r readFile) readImage(ctx context.Context, displayPath string, f *os.File,
 		fmt.Fprintf(&b, ", compressed from %.1f KB %s", float64(len(raw))/1024, mime)
 	}
 	b.WriteString(")\n")
-	if txt := readImageOCR(ctx, raw); txt != "" {
-		fmt.Fprintf(&b, "OCR (%s):\n%s\n", imageOCRLangs(), txt)
-	} else {
-		b.WriteString("(OCR пусто или недоступно — text-only модель не видит картинку; при необходимости сними скриншот и используй ocr.sh)\n")
-	}
 	return truncateImageText(b.String()), []string{img}, nil
-}
-
-// readImageOCR runs tesseract over the raw image bytes (rus+eng by default)
-// with a hard time budget; any failure yields "" so a read never fails because
-// OCR is unavailable or slow.
-func readImageOCR(ctx context.Context, raw []byte) string {
-	if os.Getenv(reasonixImageOCREnv) == "0" {
-		return ""
-	}
-	tmp, err := os.CreateTemp("", "reasonix-ocr-*")
-	if err != nil {
-		return ""
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
-		return ""
-	}
-	if err := tmp.Close(); err != nil {
-		return ""
-	}
-	ctxT, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctxT, "tesseract", name, "stdout", "-l", imageOCRLangs(), "--psm", imageOCRPSM(), "-c", "preserve_interword_spaces=1")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out.String())
-}
-
-func imageOCRLangs() string {
-	if l := os.Getenv(reasonixImageOCRLangsEnv); l != "" {
-		return l
-	}
-	return "rus+eng"
-}
-
-// imageOCRPSM returns the tesseract page-segmentation mode: 11 (sparse text)
-// by default — tuned for icon-grid phone screenshots per the NTL-524
-// experiment — overridable via REASONIX_IMAGE_OCR_PSM (e.g. "3" for dense
-// documents, "6" for a uniform text block).
-func imageOCRPSM() string {
-	if p := os.Getenv(reasonixImageOCRPSMEnv); p != "" {
-		return p
-	}
-	return "11"
 }
 
 func imageQuality() int {
