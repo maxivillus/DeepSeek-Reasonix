@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/text/transform"
 
@@ -32,10 +33,18 @@ const (
 	readImageMaxOutputBytes = 30 * 1024
 )
 
-// Image knob, mirroring jcode's env-controllable clamp:
+// Image knobs, mirroring jcode's env-controllable clamp:
 //   - REASONIX_IMAGE_JPEG_QUALITY — JPEG quality for re-encoding (default 80)
+//   - REASONIX_VISION_URL       — vision-proxy endpoint (POST /vision); если задан,
+//     read_file отправляет картинку туда и подмешивает текст/описание в вывод
+//     (DeepSeek без vision «видит» содержимое скриншота). Отключить: пустое значение.
+//   - REASONIX_VISION_TASK       — describe|document|complex|ocr (default document)
+//   - REASONIX_VISION_TIMEOUT    — таймаут vision-вызова, сек (default 120)
 const (
-	reasonixImageQualityEnv = "REASONIX_IMAGE_JPEG_QUALITY"
+	reasonixImageQualityEnv  = "REASONIX_IMAGE_JPEG_QUALITY"
+	reasonixVisionURLEnv     = "REASONIX_VISION_URL"
+	reasonixVisionTaskEnv    = "REASONIX_VISION_TASK"
+	reasonixVisionTimeoutEnv = "REASONIX_VISION_TIMEOUT"
 )
 
 func init() { tool.RegisterBuiltin(readFile{}) }
@@ -277,9 +286,9 @@ func (r readFile) ExecuteWithImages(ctx context.Context, args json.RawMessage) (
 }
 
 // readImage handles a raster image read: clamps/re-encodes via
-// imageopt.CompressForRead, appends an OCR transcript for text-only models,
-// and returns the compressed payload as a data URL for vision providers.
-// Mirrors jcode's read-time clamp+OCR so multica cards behave identically
+// imageopt.CompressForRead, appends a vision-proxy transcript (VLM/OCR) for
+// text-only models, and returns the compressed payload as a data URL.
+// Mirrors jcode's read-time clamp+vision so multica cards behave identically
 // across runtimes.
 func (r readFile) readImage(ctx context.Context, displayPath string, f *os.File, peek []byte, mime string) (string, []string, error) {
 	rest, err := io.ReadAll(f)
@@ -296,7 +305,67 @@ func (r readFile) readImage(ctx context.Context, displayPath string, f *os.File,
 		fmt.Fprintf(&b, ", compressed from %.1f KB %s", float64(len(raw))/1024, mime)
 	}
 	b.WriteString(")\n")
+	if text := visionProbe(ctx, data); text != "" {
+		b.WriteString(text)
+	}
 	return truncateImageText(b.String()), []string{img}, nil
+}
+
+// visionProbe sends the (already clamped/re-encoded) image to the local
+// vision-proxy and returns a model-facing transcript. Best-effort: returns ""
+// when disabled or on any error (the read still succeeds).
+func visionProbe(ctx context.Context, data []byte) string {
+	url := strings.TrimSpace(os.Getenv(reasonixVisionURLEnv))
+	if url == "" {
+		return ""
+	}
+	task := strings.TrimSpace(os.Getenv(reasonixVisionTaskEnv))
+	if task == "" {
+		task = "document"
+	}
+	timeout := 120
+	if v := os.Getenv(reasonixVisionTimeoutEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			timeout = n
+		}
+	}
+	body, _ := json.Marshal(map[string]string{
+		"task":  task,
+		"image": base64.StdEncoding.EncodeToString(data),
+	})
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var out struct {
+		Text  string `json:"text"`
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return ""
+	}
+	if out.Text == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n[vision: %s]\n%s\n", orDefault(out.Model, task), strings.TrimSpace(out.Text))
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func imageQuality() int {
