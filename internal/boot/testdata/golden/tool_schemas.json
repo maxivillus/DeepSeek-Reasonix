@@ -267,7 +267,7 @@
   },
   {
     "Name": "read_file",
-    "Description": "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer.",
+    "Description": "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer. Raster images (PNG/JPEG/GIF/WebP) are handled specially: the image is clamped to 1568px and re-encoded as JPEG (quality 80).",
     "ReadOnly": true,
     "Schema": {
       "properties": {

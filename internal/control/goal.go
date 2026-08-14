@@ -53,7 +53,7 @@ const (
 
 // budgetClassForLegacyMode translates old sidecars and deprecated CLI flags at
 // the compatibility boundary. The active Goal runtime stores only budgetClass.
-func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode) string {
+func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode, researchSkippedByFact bool) string {
 	switch researchMode {
 	case GoalResearchOn:
 		return budgetClassResearch
@@ -63,6 +63,16 @@ func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode) string
 		}
 		return budgetClassSimple
 	default:
+		// П.2 fact gate (multica stack): heuristic Auto research is demoted to a
+		// write budget when a fresh distinctive memory fact covers the goal, so
+		// the run does not burn a research-class turn budget on already-known
+		// ground. Explicit --research is never gated.
+		if researchSkippedByFact {
+			if taskintent.GoalNeedsWriteBudget(goal) {
+				return budgetClassWrite
+			}
+			return budgetClassSimple
+		}
 		return taskintent.ClassifyGoalBudget(goal)
 	}
 }
@@ -80,6 +90,10 @@ type goalMachine struct {
 	deliveryCheckpoint evidence.DeliveryCheckpoint
 	block              string
 	strict             bool
+	// researchSkippedByFact persists the п.2 fact-gate decision: the goal's
+	// heuristic Auto research was demoted because a fresh, distinctively
+	// matching memory fact covers it (see factCoversGoal).
+	researchSkippedByFact bool
 	continuationEpoch  uint64
 
 	tokenBudget int // configured ceiling for an unattended loop; 0 = unbounded
@@ -131,6 +145,7 @@ type goalState struct {
 	Blocks             int                         `json:"blocks,omitempty"`
 	Block              string                      `json:"block,omitempty"`
 	Strict             bool                        `json:"strict,omitempty"`
+	ResearchSkippedByFact bool                        `json:"researchSkippedByFact,omitempty"`
 	Todos              []evidence.TodoItem         `json:"todos,omitempty"`
 
 	BudgetClass            string   `json:"budgetClass,omitempty"`
@@ -192,6 +207,7 @@ type goalAdvanceResult struct {
 type goalContinuationSnapshot struct {
 	goal    string
 	scopeID string
+	researchSkippedByFact bool
 }
 
 // goalStatePath derives a session's persisted goal-state sidecar.
@@ -206,10 +222,10 @@ func (g *goalMachine) setStatePath(path string) {
 }
 
 // snapshot returns the fields Compose injects into outgoing turns.
-func (g *goalMachine) snapshot() (goal, status string) {
+func (g *goalMachine) snapshot() (goal, status string, researchSkippedByFact bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.goal, g.status
+	return g.goal, g.status, g.researchSkippedByFact
 }
 
 func (g *goalMachine) goalText() string {
@@ -279,17 +295,17 @@ func (g *goalMachine) statusForDisplay() string {
 // the per-goal runtime counters, and returns the state to persist. ok is
 // false (no persistence) when the goal is unchanged or no state path is
 // configured.
-func (g *goalMachine) set(goal, preferredBudgetClass string, todos []evidence.TodoItem) (string, []byte, bool) {
+func (g *goalMachine) set(goal, preferredBudgetClass string, researchSkippedByFact bool, todos []evidence.TodoItem) (string, []byte, bool) {
 	goal = strings.TrimSpace(goal)
 	if goal != "" && preferredBudgetClass == "" {
 		preferredBudgetClass = taskintent.ClassifyGoalBudget(goal)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if goal != "" && g.goal == goal && g.status == GoalStatusRunning && g.budgetClass == preferredBudgetClass {
+	if goal != "" && g.goal == goal && g.status == GoalStatusRunning && g.budgetClass == preferredBudgetClass && g.researchSkippedByFact == researchSkippedByFact {
 		return "", nil, false
 	}
-	g.installGoalLocked(goal, preferredBudgetClass)
+	g.installGoalLocked(goal, preferredBudgetClass, researchSkippedByFact)
 	return g.buildStateLocked(todos)
 }
 
@@ -308,7 +324,7 @@ func (g *goalMachine) setLegacyArchiveBlockedWithTaskID(goal, preferredBudgetCla
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.installGoalLocked(goal, preferredBudgetClass)
+	g.installGoalLocked(goal, preferredBudgetClass, false)
 	if goal != "" {
 		g.status = GoalStatusBlocked
 	}
@@ -318,7 +334,7 @@ func (g *goalMachine) setLegacyArchiveBlockedWithTaskID(goal, preferredBudgetCla
 	return g.buildStateLocked(todos)
 }
 
-func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string) {
+func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string, researchSkippedByFact bool) {
 	g.continuationEpoch++
 	g.turnsUsed, g.tokensUsed, g.requestsUsed, g.noProgressTurns = 0, 0, 0, 0
 	g.workDurationMs = 0
@@ -334,6 +350,7 @@ func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string) {
 		g.noProgressLimit = 0
 		g.scopeID = ""
 		g.deliveryCheckpoint = evidence.DeliveryCheckpoint{}
+		g.researchSkippedByFact = false
 	} else {
 		g.goal, g.status = goal, GoalStatusRunning
 		g.scopeID = newGoalScopeID()
@@ -342,6 +359,7 @@ func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string) {
 		g.turnsLimit = unlimitedGoalTurns
 		g.tokensLimit = g.tokenBudget
 		g.noProgressLimit = 0
+		g.researchSkippedByFact = researchSkippedByFact
 	}
 	// Installing a normal Goal always abandons any pending legacy migration.
 	g.legacyTaskID = ""
@@ -465,8 +483,9 @@ func (g *goalMachine) admitContinuation(res goalAdvanceResult) (goalContinuation
 		g.scopeID = newGoalScopeID()
 	}
 	return goalContinuationSnapshot{
-		goal:    g.goal,
-		scopeID: g.scopeID,
+		goal:                  g.goal,
+		scopeID:               g.scopeID,
+		researchSkippedByFact: g.researchSkippedByFact,
 	}, true
 }
 
@@ -622,6 +641,7 @@ func (g *goalMachine) buildStateLocked(todos []evidence.TodoItem) (path string, 
 		Turns:                  g.turnsUsed,
 		Block:                  g.block,
 		Strict:                 g.strict,
+		ResearchSkippedByFact:  g.researchSkippedByFact,
 		Todos:                  todos,
 		BudgetClass:            g.budgetClass,
 		TurnsUsed:              g.turnsUsed,
@@ -739,6 +759,9 @@ func (g *goalMachine) restoreFromState(sessionPath string) (path string, data []
 	if g.status == "" {
 		g.status = GoalStatusStopped
 	}
+	// П.2 fact gate: persist the demotion decision across restarts so a
+	// running goal does not silently regain a research-class budget.
+	g.researchSkippedByFact = state.ResearchSkippedByFact
 	// Legacy task identity is migration-only compatibility data. It is returned to
 	// the Controller's archive boundary and retained in the machine only while a
 	// fail-closed migration remains pending.

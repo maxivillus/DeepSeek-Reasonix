@@ -210,6 +210,12 @@ func (m *memoryManager) saveMemory(fact memory.Memory) (string, error) {
 	if mem == nil {
 		return "", nil
 	}
+	// The management-surface save is user-confirmed; callers that are NOT user
+	// confirmation (e.g. the incremental auto-extractor) must set Trust
+	// explicitly — zero here means high.
+	if fact.Trust == "" {
+		fact.Trust = memory.TrustHigh
+	}
 	path, err := mem.Store.Save(fact)
 	if err != nil {
 		return "", err

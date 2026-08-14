@@ -130,7 +130,7 @@ func toolCallChunk(id, name, args string) provider.Chunk {
 }
 
 func TestActiveGoalBlockCarriesTaskContractAndPausePolicy(t *testing.T) {
-	block := activeGoalBlock("fix the parser")
+	block := activeGoalBlock("fix the parser", false)
 	for _, want := range []string{
 		"Treat the user's goal as a task contract",
 		"Context, Request, Output format, Constraints",
@@ -694,7 +694,7 @@ func TestGoalInterceptsCompleteWithIncompleteTodos(t *testing.T) {
 func TestGoalAdvanceResultCannotCrossGoalLifecycle(t *testing.T) {
 	newResult := func(t *testing.T, g *goalMachine) goalAdvanceResult {
 		t.Helper()
-		g.set("old goal", "", nil)
+		g.set("old goal", "", false, nil)
 		res := g.advance(goalAdvanceInput{
 			report: &goalTurnReport{status: GoalStatusComplete, reason: ""},
 			todos: []evidence.TodoItem{{
@@ -719,7 +719,7 @@ func TestGoalAdvanceResultCannotCrossGoalLifecycle(t *testing.T) {
 	t.Run("replacement goal invalidates result", func(t *testing.T) {
 		var g goalMachine
 		res := newResult(t, &g)
-		g.set("replacement goal", "", nil)
+		g.set("replacement goal", "", false, nil)
 		if got, ok := g.acceptContinuation(res); ok {
 			t.Fatalf("replacement goal accepted stale intercept %q", got)
 		}

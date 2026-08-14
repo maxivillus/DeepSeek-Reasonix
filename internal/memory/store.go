@@ -74,6 +74,42 @@ func NormalizeFactScope(s string) FactScope {
 	return FactScopeProject
 }
 
+// TrustLevel grades how strongly a fact may be relied on without re-
+// verification — the storage-side proxy for "irrefutable". The empty value
+// (and the default for facts saved before this field existed) is Medium.
+type TrustLevel string
+
+const (
+	TrustHigh   TrustLevel = "high"   // explicitly confirmed by the user
+	TrustMedium TrustLevel = "medium" // default; auto-extracted from sessions
+	TrustLow    TrustLevel = "low"    // unverified / hand-marked as unreliable
+)
+
+// NormalizeTrust maps any input to a valid TrustLevel; empty → Medium.
+func NormalizeTrust(s string) TrustLevel {
+	switch TrustLevel(strings.ToLower(strings.TrimSpace(s))) {
+	case TrustHigh:
+		return TrustHigh
+	case TrustLow:
+		return TrustLow
+	default:
+		return TrustMedium
+	}
+}
+
+// TrustMultiplier is the recall score weight (jcode-inspired): high-trust
+// facts rank above equal medium-trust facts, low-trust facts sink.
+func TrustMultiplier(t TrustLevel) float64 {
+	switch NormalizeTrust(string(t)) {
+	case TrustHigh:
+		return 1.5
+	case TrustLow:
+		return 0.7
+	default:
+		return 1.0
+	}
+}
+
 // Memory is one stored fact.
 type Memory struct {
 	ID             string // immutable identity; Name may change without changing ID
@@ -91,6 +127,7 @@ type Memory struct {
 	ExpiresAt      time.Time  // hard freshness boundary; zero = never expires
 	LastVerifiedAt time.Time  // last explicit confirmation; renews the freshness clock
 	Keywords       string     // search aliases (bilingual synonyms, related commands); recall-only, never rendered into the index
+	Trust          TrustLevel // high (user-confirmed) / medium (default) / low; empty = medium
 	Body           string     // the fact itself (Markdown)
 }
 
@@ -729,6 +766,7 @@ func loadMemory(path string) (Memory, bool) {
 		LastVerifiedAt: parseMemoryTime(fm["last_verified_at"]),
 		Type:           persistedFactType(fm),
 		Scope:          factScopeFromFrontmatter(fm["scope"]),
+		Trust:          trustFromFrontmatter(fm["trust"]),
 		Body:           strings.TrimSpace(body),
 	}
 	if m.Name == "" {
@@ -790,6 +828,15 @@ func factScopeFromFrontmatter(s string) FactScope {
 	default:
 		return ""
 	}
+}
+
+// trustFromFrontmatter keeps the empty string (medium default) when the file
+// predates the trust field, so legacy facts behave exactly as before.
+func trustFromFrontmatter(s string) TrustLevel {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	return NormalizeTrust(s)
 }
 
 func (s Store) scopeForDir(dir string) FactScope {

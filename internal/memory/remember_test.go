@@ -42,6 +42,9 @@ func TestRememberToolSaves(t *testing.T) {
 	if list[0].Title != "Likes Go" {
 		t.Fatalf("title not persisted through the tool: %q", list[0].Title)
 	}
+	if list[0].Trust != TrustHigh {
+		t.Fatalf("remember tool must save high-trust (user-confirmed) facts, got %q", list[0].Trust)
+	}
 }
 
 func TestRememberToolDefaultsToProjectScope(t *testing.T) {

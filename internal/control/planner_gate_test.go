@@ -73,8 +73,8 @@ func TestTaskWarrantsPlanner(t *testing.T) {
 		{"explain how to migrate from v1 to v2", true},
 		{goalContinueTurn, false},
 		{"Goal signaled complete but issues remain:\n- the following tasks are still incomplete:\n  - Fix login (in_progress)\nFix remaining work, or if a check cannot be run declare it in update_goal completion.unverified and report complete.", false},
-		{activeGoalBlock("execute plan: fix the parser") + "\n\n" + goalContinueTurn, false},
-		{activeGoalBlock("implement the new caching layer") + "\n\nimplement the new caching layer across the backend", true},
+		{activeGoalBlock("execute plan: fix the parser", false) + "\n\n" + goalContinueTurn, false},
+		{activeGoalBlock("implement the new caching layer", false) + "\n\nimplement the new caching layer across the backend", true},
 	}
 	for _, c := range cases {
 		if got := TaskWarrantsPlanner(c.input); got != c.want {
@@ -477,7 +477,7 @@ func TestPlannerPolicyUsesPristineMetadataInsteadOfInjectedContext(t *testing.T)
 	ctx := withPlannerTurnMetadata(context.Background(), plannerTurnMetadata{
 		UserText: "fix typo in README",
 	})
-	input := activeGoalBlock("migrate authentication across the backend") +
+	input := activeGoalBlock("migrate authentication across the backend", false) +
 		"\n\n<capability-route>\nhigh risk migration\n</capability-route>\n\nfix typo in README"
 	got := DecidePlannerRoute(ctx, input)
 	if got.Route != agent.PlannerRouteExecutorOnly || got.Reason != plannerReasonAtomicEdit {

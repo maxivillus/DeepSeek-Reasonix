@@ -85,7 +85,7 @@ func (g *goalMachine) normalizeContinuousState(legacyMode GoalResearchMode, lega
 	}
 	migrated := false
 	if g.budgetClass == "" {
-		g.budgetClass = budgetClassForLegacyMode(g.goal, legacyMode)
+		g.budgetClass = budgetClassForLegacyMode(g.goal, legacyMode, false)
 	}
 	if legacyTaskID != "" {
 		g.budgetClass = budgetClassResearch

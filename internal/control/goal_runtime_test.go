@@ -261,7 +261,7 @@ func TestGoalTurnRecorderProtocol(t *testing.T) {
 			t.Fatal(err)
 		}
 		// The goal is replaced: epoch bumps, scope rotates.
-		g.set("replacement", "", nil)
+		g.set("replacement", "", false, nil)
 		if got := rec.validReport(rec.epoch); got != nil {
 			t.Fatalf("stale recorder report = %+v, want nil", got)
 		}
@@ -269,7 +269,7 @@ func TestGoalTurnRecorderProtocol(t *testing.T) {
 
 	t.Run("late record after replacement rejected", func(t *testing.T) {
 		g, rec := newRec(t)
-		g.set("replacement", "", nil)
+		g.set("replacement", "", false, nil)
 		if _, err := rec.RecordGoalReport(report(GoalStatusComplete, "")); err == nil {
 			t.Fatal("late record on a replaced goal must be rejected")
 		}
@@ -281,7 +281,7 @@ func TestGoalTurnRecorderProtocol(t *testing.T) {
 		if g.tokensUsed != 150 {
 			t.Fatalf("tokensUsed = %d, want 150", g.tokensUsed)
 		}
-		g.set("replacement", "", nil)
+		g.set("replacement", "", false, nil)
 		rec.addUsage(50)
 		if g.tokensUsed != 0 {
 			t.Fatalf("stale usage folded into replacement goal: %d", g.tokensUsed)
@@ -352,7 +352,7 @@ func TestGoalWorkDurationUsesPerRunMaximumAndRejectsStaleRuns(t *testing.T) {
 	}
 
 	g.mu.Lock()
-	g.installGoalLocked("replacement", budgetClassSimple)
+	g.installGoalLocked("replacement", budgetClassSimple, false)
 	g.mu.Unlock()
 	second.addWorkDuration(9_000)
 	if g.workDurationMs != 0 {
@@ -375,7 +375,7 @@ func TestMaxRunWorkDurationTakesOnlyNewAssistantMaximum(t *testing.T) {
 
 func TestBudgetClassForBareFaultIsWrite(t *testing.T) {
 	// User-reported Chinese bare fault keeps its legacy compatibility class.
-	class := budgetClassForLegacyMode("数据模型管理器又出现历史 BUG 了……", GoalResearchAuto)
+	class := budgetClassForLegacyMode("数据模型管理器又出现历史 BUG 了……", GoalResearchAuto, false)
 	if class != budgetClassWrite {
 		t.Fatalf("budget class = %q, want write", class)
 	}
@@ -386,12 +386,12 @@ func TestBudgetClassForBareFaultIsWrite(t *testing.T) {
 		"诊断数据库连接失败原因。",
 		"复现并定位问题，但不要修复。",
 	} {
-		if got := budgetClassForLegacyMode(goal, GoalResearchAuto); got != budgetClassSimple {
+		if got := budgetClassForLegacyMode(goal, GoalResearchAuto, false); got != budgetClassSimple {
 			t.Errorf("budgetClassFor(%q) = %q, want simple", goal, got)
 		}
 	}
 	// Explicit mutation verbs remain write.
-	if got := budgetClassForLegacyMode("fix the crash in settings", GoalResearchAuto); got != budgetClassWrite {
+	if got := budgetClassForLegacyMode("fix the crash in settings", GoalResearchAuto, false); got != budgetClassWrite {
 		t.Fatalf("explicit fix class = %q, want write", got)
 	}
 }

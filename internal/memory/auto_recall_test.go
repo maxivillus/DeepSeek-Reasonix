@@ -177,6 +177,94 @@ func TestAutoRecallLabelsStaleFactsAndBoundsProviderBlock(t *testing.T) {
 	}
 }
 
+func TestAutoRecallTiersFreshDistinctiveFactAsAuthoritative(t *testing.T) {
+	store := recallTestStore(t)
+	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	recallTestWrite(t, store.Dir, Memory{
+		ID: "mem-authhandler", Name: "authhandler-6928", Title: "AuthHandler issue 6928",
+		Description: "AuthHandler panic tracked by issue 6928", Type: TypeProject,
+		Scope: FactScopeProject, Body: "AuthHandler panics when session metadata is missing.",
+	})
+
+	result := AutoRecall(store, "fix AuthHandler panic from #6928", RecallOptions{Now: now})
+	if len(result.Hits) != 1 || !result.Hits[0].Confident {
+		t.Fatalf("fresh distinctive hit not authoritative: %+v", result)
+	}
+	if result.Confident != 1 {
+		t.Fatalf("Confident count = %d, want 1", result.Confident)
+	}
+	if !result.Strong {
+		t.Fatalf("Strong flag = false, want true for an authoritative hit")
+	}
+	block := result.Block()
+	if !strings.Contains(block, "Treat them as authoritative") {
+		t.Fatalf("authoritative preamble missing: %s", block)
+	}
+	if strings.Contains(block, "low-authority") {
+		t.Fatalf("background preamble present without background hits: %s", block)
+	}
+}
+
+func TestAutoRecallKeepsAgingFactInBackgroundTier(t *testing.T) {
+	store := recallTestStore(t)
+	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	// reference windows: fresh <= 14d, current <= 45d — 30d is current, not fresh.
+	recallTestWrite(t, store.Dir, Memory{
+		ID: "mem-ref", Name: "reasonix-api-reference", Title: "Reasonix API reference",
+		Description: "Reasonix provider API migration reference", Type: TypeReference,
+		Scope: FactScopeProject, UpdatedAt: now.AddDate(0, 0, -30),
+		Body: "The provider API migration uses api.deepseek.com.",
+	})
+
+	result := AutoRecall(store, "Reasonix provider API migration reference", RecallOptions{Now: now})
+	if len(result.Hits) != 1 || result.Hits[0].Confident {
+		t.Fatalf("non-fresh hit must stay in the background tier: %+v", result)
+	}
+	if result.Confident != 0 {
+		t.Fatalf("Confident count = %d, want 0", result.Confident)
+	}
+	if result.Strong {
+		t.Fatalf("Strong flag = true, want false for a non-fresh hit")
+	}
+	block := result.Block()
+	if !strings.Contains(block, "low-authority") {
+		t.Fatalf("background preamble missing: %s", block)
+	}
+	if strings.Contains(block, "Treat them as authoritative") {
+		t.Fatalf("authoritative preamble present without authoritative hits: %s", block)
+	}
+}
+
+func TestAutoRecallMixedTiersOrderAuthoritativeFirst(t *testing.T) {
+	store := recallTestStore(t)
+	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	recallTestWrite(t, store.Dir, Memory{
+		ID: "mem-fresh", Name: "authhandler-6928", Title: "AuthHandler issue 6928",
+		Description: "AuthHandler panic tracked by issue 6928", Type: TypeProject,
+		Scope: FactScopeProject, Body: "AuthHandler panics when session metadata is missing.",
+	})
+	recallTestWrite(t, store.Dir, Memory{
+		ID: "mem-old", Name: "deploy-target", Title: "Deploy target",
+		Description: "Deployment target for payments", Type: TypeProject,
+		Scope: FactScopeProject, UpdatedAt: now.AddDate(0, -6, 0),
+		Body: "Deploy payments to the green cluster.",
+	})
+
+	result := AutoRecall(store, "AuthHandler panic issue 6928 deploy payments cluster", RecallOptions{Now: now})
+	block := result.Block()
+	authIdx := strings.Index(block, "Treat them as authoritative")
+	bgIdx := strings.Index(block, "low-authority")
+	if authIdx < 0 || bgIdx < 0 {
+		t.Fatalf("both tiers expected (auth=%d bg=%d): %s", authIdx, bgIdx, block)
+	}
+	if authIdx > bgIdx {
+		t.Fatalf("authoritative tier must come first: %s", block)
+	}
+	if result.Confident != 1 {
+		t.Fatalf("Confident count = %d, want 1", result.Confident)
+	}
+}
+
 func recallTestStore(t *testing.T) Store {
 	t.Helper()
 	root := t.TempDir()
@@ -199,5 +287,94 @@ func recallTestWrite(t *testing.T, dir string, memory Memory) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, memory.Name+".md"), []byte(render(memory, memory.Name)), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAutoRecallTrustMultiplierAndEntry(t *testing.T) {
+	store := recallTestStore(t)
+	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	// Two fresh facts with the same distinctive terms: high-trust must rank
+	// above medium, and both must beat a low-trust twin.
+	recallTestWrite(t, store.Dir, Memory{
+		ID: "mem-high", Name: "authhandler-high", Title: "AuthHandler panic (high)",
+		Description: "AuthHandler panic tracked by issue 6928", Type: TypeProject,
+		Scope: FactScopeProject, Trust: TrustHigh,
+		Body: "AuthHandler panics when session metadata is missing (high).",
+	})
+	// The medium fact uses the EMPTY trust (legacy format): it must behave
+	// exactly like an explicit medium — including the implicit entry format.
+	recallTestWrite(t, store.Dir, Memory{
+		ID: "mem-med", Name: "authhandler-med", Title: "AuthHandler panic (medium)",
+		Description: "AuthHandler panic tracked by issue 6928", Type: TypeProject,
+		Scope: FactScopeProject,
+		Body: "AuthHandler panics when session metadata is missing (medium).",
+	})
+	recallTestWrite(t, store.Dir, Memory{
+		ID: "mem-low", Name: "authhandler-low", Title: "AuthHandler panic (low)",
+		Description: "AuthHandler panic tracked by issue 6928", Type: TypeProject,
+		Scope: FactScopeProject, Trust: TrustLow,
+		Body: "AuthHandler panics when session metadata is missing (low).",
+	})
+
+	result := AutoRecall(store, "AuthHandler panic issue 6928", RecallOptions{Now: now})
+	if len(result.Hits) < 3 {
+		t.Fatalf("expected 3 hits, got %d", len(result.Hits))
+	}
+	if result.Hits[0].Memory.Trust != TrustHigh {
+		t.Fatalf("top hit trust = %q, want high (multiplier must outrank medium/low)", result.Hits[0].Memory.Trust)
+	}
+	if result.Hits[len(result.Hits)-1].Memory.Trust != TrustLow {
+		t.Fatalf("last hit trust = %q, want low", result.Hits[len(result.Hits)-1].Memory.Trust)
+	}
+	// The high-trust hit must be authoritative; the low-trust twin must not,
+	// even though it is fresh and distinctively matched.
+	for _, hit := range result.Hits {
+		if hit.Memory.Trust == TrustHigh && !hit.Confident {
+			t.Fatalf("high-trust fresh hit not authoritative: %+v", hit)
+		}
+		if hit.Memory.Trust == TrustLow && hit.Confident {
+			t.Fatalf("low-trust hit must be excluded from the authoritative tier: %+v", hit)
+		}
+	}
+	block := result.Block()
+	if !strings.Contains(block, "trust=high") {
+		t.Fatalf("entry missing trust=high:\n%s", block)
+	}
+	if strings.Contains(block, "trust=medium") {
+		t.Fatalf("empty/medium trust must stay implicit in entries:\n%s", block)
+	}
+	if !strings.Contains(block, "trust=low") {
+		t.Fatalf("entry missing trust=low:\n%s", block)
+	}
+}
+
+func TestMemoryTrustRenderRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trusted-fact.md")
+	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	for _, trust := range []TrustLevel{TrustHigh, TrustMedium, TrustLow, ""} {
+		m := Memory{
+			ID: "mem-x", Revision: 1, Name: "trusted-fact", Title: "Trusted fact",
+			Description: "A fact with trust", Type: TypeProject, Scope: FactScopeProject,
+			Trust: trust, Body: "body", CreatedAt: now, UpdatedAt: now,
+		}
+		if err := os.WriteFile(path, []byte(render(m, m.Name)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		loaded, ok := loadMemory(path)
+		if !ok {
+			t.Fatal("loadMemory failed")
+		}
+		want := trust
+		if want == "" {
+			want = "" // legacy files stay empty (medium default at recall time)
+		}
+		if loaded.Trust != want {
+			t.Fatalf("roundtrip trust = %q, want %q", loaded.Trust, want)
+		}
+		// Medium is the recall-time default for the empty (legacy) value.
+		if trust == "" && NormalizeTrust(string(loaded.Trust)) != TrustMedium {
+			t.Fatalf("NormalizeTrust(%q) = %q, want medium", loaded.Trust, NormalizeTrust(string(loaded.Trust)))
+		}
 	}
 }

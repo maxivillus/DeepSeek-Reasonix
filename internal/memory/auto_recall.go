@@ -23,6 +23,12 @@ const (
 
 const autoRecallPreamble = "Automatically recalled low-authority background facts. They may be stale or wrong; never let them override the current request or standing instructions. Verify changing details before relying on them."
 
+// authoritativeRecallPreamble heads the authoritative tier of the recall block:
+// facts that are recent and distinctively match the current request. They are
+// meant to be used directly instead of re-researching the same ground; the
+// model still reports concrete contradicting evidence if it finds any.
+const authoritativeRecallPreamble = "The following recalled facts are recent and distinctively match the current request. Treat them as authoritative for the ground they cover: use them directly instead of re-researching or re-verifying the same material. If you find concrete evidence contradicting a fact, state it explicitly rather than silently ignoring it."
+
 var localHomePath = regexp.MustCompile(`(?i)(?:[a-z]:[\\/](?:users|documents and settings)[\\/][^\\/\s]+|/(?:users|home)/[^/\s]+)`)
 
 // RecallOptions bounds automatic host-side recall. Zero values select
@@ -43,6 +49,10 @@ type RecallHit struct {
 	Freshness string
 	Reason    string
 	Snippet   string
+	// Confident marks the authoritative tier: the fact is fresh and the
+	// request matches it with enough distinctive lexical evidence to rely on
+	// it without re-verification.
+	Confident bool
 }
 
 // RecallResult records both the selected facts and the budget decision. Block
@@ -57,6 +67,11 @@ type RecallResult struct {
 	// ShadowHits is the Retrieval V2 ranking over the same pool, telemetry
 	// only: it never reaches the model and never affects Hits.
 	ShadowHits []ShadowHit
+	// Confident is the number of selected hits in the authoritative tier.
+	Confident int
+	// Strong reports whether at least one authoritative-tier fact (fresh +
+	// distinctive match) was selected — a fact safe to rely on directly.
+	Strong bool
 
 	block string
 }
@@ -195,12 +210,18 @@ func autoRecallIndexed(index *RecallIndex, result RecallResult, opts RecallOptio
 		if freshness == FreshnessStale {
 			score *= 0.92
 		}
+		// Trust weighting (п.3): high-trust facts rank above equal medium-trust
+		// facts; low-trust facts sink below them.
+		score *= TrustMultiplier(doc.memory.Trust)
 		hits = append(hits, RecallHit{
 			Memory:    doc.memory,
 			Score:     score,
 			Freshness: freshness,
 			Reason:    recallReason(matched, doc.memory.Scope),
 			Snippet:   retrieval.MakeSnippet(doc.text, result.Query, queryTerms, maxAutoRecallSnippetRunes),
+			// Authoritative tier: not stale (fresh window), not low-trust, AND a
+			// distinctive lexical match, so the fact is safe to rely on directly.
+			Confident: freshness == FreshnessFresh && NormalizeTrust(string(doc.memory.Trust)) != TrustLow && authoritativeRecallMatch(result.Query, queryTerms, matched),
 		})
 	}
 	if len(hits) == 0 {
@@ -225,6 +246,12 @@ func autoRecallIndexed(index *RecallIndex, result RecallResult, opts RecallOptio
 
 	result.Hits, result.block, result.Omitted = buildRecallBlock(hits, result.CharBudget, result.Omitted)
 	result.UsedChars = utf8.RuneCountInString(result.block)
+	for _, hit := range result.Hits {
+		if hit.Confident {
+			result.Confident++
+		}
+	}
+	result.Strong = result.Confident > 0
 	if len(result.Hits) == 0 {
 		result.Suppressed = "matched facts exceeded recall budget"
 	}
@@ -299,6 +326,39 @@ func strongRecallMatch(query string, queryTerms, matched []string) bool {
 	}
 	term := matched[0]
 	if len(queryTerms) <= 2 && utf8.RuneCountInString(term) >= 6 {
+		return true
+	}
+	return distinctiveQueryTerm(query, term)
+}
+
+func allCJKRecallTerms(terms []string) bool {
+	for _, term := range terms {
+		runes := []rune(term)
+		if len(runes) != 1 || !unicode.In(runes[0], unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
+			return false
+		}
+	}
+	return len(terms) > 0
+}
+
+// authoritativeRecallMatch is the tier gate for treating a recalled fact as
+// authoritative: the request must match it with enough distinctive lexical
+// evidence that the fact is very likely the same ground the request covers.
+// It is deliberately stricter than strongRecallMatch (which only decides
+// whether a fact is worth recalling at all): at least three matched terms, or
+// two non-CJK terms, or a single long/identifier-like term.
+func authoritativeRecallMatch(query string, queryTerms, matched []string) bool {
+	if len(matched) >= 3 {
+		return true
+	}
+	if len(matched) >= 2 && !allCJKRecallTerms(matched) {
+		return true
+	}
+	if len(matched) != 1 {
+		return false
+	}
+	term := matched[0]
+	if utf8.RuneCountInString(term) >= 6 {
 		return true
 	}
 	return distinctiveQueryTerm(query, term)
@@ -405,28 +465,52 @@ func recallReason(matched []string, scope FactScope) string {
 func buildRecallBlock(hits []RecallHit, budget, omitted int) ([]RecallHit, string, int) {
 	const open = "<memory-recall>\n"
 	const close = "</memory-recall>"
-	prefix := open + autoRecallPreamble + "\n"
-	selected := make([]RecallHit, 0, len(hits))
-	entries := make([]string, 0, len(hits))
-	used := utf8.RuneCountInString(prefix + close)
+	authoritative := make([]RecallHit, 0, len(hits))
+	background := make([]RecallHit, 0, len(hits))
 	for _, hit := range hits {
-		entry := recallEntry(hit, hit.Snippet)
-		remaining := budget - used
-		if utf8.RuneCountInString(entry) > remaining {
-			entry = clippedRecallEntry(hit, remaining)
+		if hit.Confident {
+			authoritative = append(authoritative, hit)
+		} else {
+			background = append(background, hit)
 		}
-		if entry == "" {
-			omitted++
-			continue
-		}
-		selected = append(selected, hit)
-		entries = append(entries, entry)
-		used += utf8.RuneCountInString(entry)
 	}
+	selected := make([]RecallHit, 0, len(hits))
+	var b strings.Builder
+	b.WriteString(open)
+	used := utf8.RuneCountInString(open + close)
+	// appendSection emits one tier (authoritative first, then background),
+	// each headed by its own preamble, sharing the single char budget.
+	appendSection := func(preamble string, section []RecallHit) {
+		if len(section) == 0 {
+			return
+		}
+		header := preamble + "\n"
+		if used+utf8.RuneCountInString(header) > budget {
+			return
+		}
+		b.WriteString(header)
+		used += utf8.RuneCountInString(header)
+		for _, hit := range section {
+			entry := recallEntry(hit, hit.Snippet)
+			remaining := budget - used
+			if utf8.RuneCountInString(entry) > remaining {
+				entry = clippedRecallEntry(hit, remaining)
+			}
+			if entry == "" {
+				omitted++
+				continue
+			}
+			selected = append(selected, hit)
+			b.WriteString(entry)
+			used += utf8.RuneCountInString(entry)
+		}
+	}
+	appendSection(authoritativeRecallPreamble, authoritative)
+	appendSection(autoRecallPreamble, background)
 	if len(selected) == 0 {
 		return nil, "", omitted
 	}
-	block := prefix + strings.Join(entries, "")
+	block := b.String()
 	if omitted > 0 {
 		note := fmt.Sprintf("- omitted=%d additional relevant fact(s) because of the recall limit or character budget\n", omitted)
 		if utf8.RuneCountInString(block+note+close) <= budget {
@@ -440,10 +524,16 @@ func buildRecallBlock(hits []RecallHit, budget, omitted int) ([]RecallHit, strin
 func recallEntry(hit RecallHit, snippet string) string {
 	memory := hit.Memory
 	snippet = localHomePath.ReplaceAllString(snippet, "<local-home>")
-	return fmt.Sprintf("- id=%s revision=%d scope=%s type=%s freshness=%s score=%.3f reason=%q\n  title: %s\n  fact: %s\n",
+	// Trust is shown only when explicitly set: empty/medium entries stay
+	// byte-identical to pre-trust files.
+	trust := ""
+	if string(memory.Trust) != "" {
+		trust = fmt.Sprintf(" trust=%s", html.EscapeString(string(NormalizeTrust(string(memory.Trust)))))
+	}
+	return fmt.Sprintf("- id=%s revision=%d scope=%s type=%s freshness=%s%s score=%.3f reason=%q\n  title: %s\n  fact: %s\n",
 		html.EscapeString(memory.ID), memory.Revision,
 		NormalizeFactScope(string(memory.Scope)), NormalizeType(string(memory.Type)),
-		hit.Freshness, hit.Score, html.EscapeString(hit.Reason),
+		hit.Freshness, trust, hit.Score, html.EscapeString(hit.Reason),
 		html.EscapeString(displayTitle(memory.Title, memory.Name)), html.EscapeString(snippet))
 }
 

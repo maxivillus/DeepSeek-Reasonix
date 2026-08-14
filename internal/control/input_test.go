@@ -1543,3 +1543,48 @@ func TestIsSyntheticUserMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestFactGateApplies(t *testing.T) {
+	researchGoal := "系统性地研究并分析 NTL-565 make 问题，修复并验证 custom/bin/make 方案，总结文档"
+	plainGoal := "fix the typo in the README"
+	cases := []struct {
+		name   string
+		goal   string
+		mode   GoalResearchMode
+		strong bool
+		want   bool
+	}{
+		{"auto+research-heuristic+strong → gate", researchGoal, GoalResearchAuto, true, true},
+		{"auto+research-heuristic+no-fact → no gate", researchGoal, GoalResearchAuto, false, false},
+		{"auto+plain+strong → no gate (no research anyway)", plainGoal, GoalResearchAuto, true, false},
+		{"explicit --research never gated", researchGoal, GoalResearchOn, true, false},
+		{"explicit --no-research never gated", researchGoal, GoalResearchOff, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := factGateApplies(tc.goal, tc.mode, tc.strong); got != tc.want {
+				t.Fatalf("factGateApplies(%q, %v, %v) = %v, want %v", tc.goal, tc.mode, tc.strong, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestActiveGoalBlockFactGateMarker(t *testing.T) {
+	goal := "系统性地研究并分析 NTL-565 make 问题，修复并验证 custom/bin/make 方案，总结文档"
+
+	gated := activeGoalBlock(goal, true)
+	if !strings.Contains(gated, "Auto-research was skipped for this goal") {
+		t.Fatalf("gated block missing fact-covers marker:\n%s", gated)
+	}
+	if strings.Contains(gated, "AutoResearch protocol") {
+		t.Fatalf("gated block still carries AutoResearch protocol instructions:\n%s", gated)
+	}
+
+	ungated := activeGoalBlock(goal, false)
+	if strings.Contains(ungated, "Auto-research was skipped") {
+		t.Fatalf("ungated block has marker without gate:\n%s", ungated)
+	}
+	if strings.Contains(ungated, "Auto-research was skipped") {
+		t.Fatalf("ungated block has marker without gate:\n%s", ungated)
+	}
+}

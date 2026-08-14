@@ -305,16 +305,20 @@ func renderMemoryRecall(recall memory.RecallResult) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "last memory recall\n  query=%s\n", memoryOneLine(recall.Query))
-	fmt.Fprintf(&b, "  budget=%d/%d omitted=%d", recall.UsedChars, recall.CharBudget, recall.Omitted)
+	fmt.Fprintf(&b, "  budget=%d/%d omitted=%d confident=%d", recall.UsedChars, recall.CharBudget, recall.Omitted, recall.Confident)
 	if recall.Suppressed != "" {
 		fmt.Fprintf(&b, " suppressed=%s", memoryOneLine(recall.Suppressed))
 	}
 	b.WriteByte('\n')
 	for _, hit := range recall.Hits {
 		fact := hit.Memory
-		fmt.Fprintf(&b, "  id=%s revision=%d scope=%s type=%s freshness=%s score=%.3f\n",
+		trust := ""
+		if string(fact.Trust) != "" {
+			trust = " trust=" + string(memory.NormalizeTrust(string(fact.Trust)))
+		}
+		fmt.Fprintf(&b, "  id=%s revision=%d scope=%s type=%s freshness=%s%s score=%.3f\n",
 			fact.ID, fact.Revision, memory.NormalizeFactScope(string(fact.Scope)),
-			memory.NormalizeType(string(fact.Type)), hit.Freshness, hit.Score)
+			memory.NormalizeType(string(fact.Type)), hit.Freshness, trust, hit.Score)
 		fmt.Fprintf(&b, "    name=%s reason=%s\n", fact.Name, memoryOneLine(hit.Reason))
 	}
 	return strings.TrimRight(b.String(), "\n")

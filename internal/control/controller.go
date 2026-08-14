@@ -57,6 +57,7 @@ import (
 	"reasonix/internal/shellrun"
 	"reasonix/internal/skill"
 	"reasonix/internal/store"
+	"reasonix/internal/taskintent"
 	"reasonix/internal/taskmonitor"
 	"reasonix/internal/tool"
 	"reasonix/internal/workspacelease"
@@ -2802,7 +2803,7 @@ func (c *Controller) SetGoalDurable(goal string) error {
 		path, data, persist = c.goals.setLegacyArchiveBlockedWithTaskID(resolved, setup.budgetClass, setup.blockReason, setup.legacyTaskID, c.goalTodos())
 		c.replaceLegacyRestore(legacyGoalRestore{taskID: setup.legacyTaskID, epoch: c.goals.continuationToken(), explicit: setup.explicit})
 	} else {
-		path, data, persist = c.goals.set(resolved, setup.budgetClass, c.goalTodos())
+		path, data, persist = c.goals.set(resolved, setup.budgetClass, setup.researchSkippedByFact, c.goalTodos())
 		c.replaceLegacyRestore(legacyGoalRestore{})
 	}
 	if persist {
@@ -2819,6 +2820,9 @@ func (c *Controller) SetGoalDurable(goal string) error {
 	}
 	if setup.notice != "" {
 		c.notice(setup.notice)
+	}
+	if setup.researchSkippedByFact {
+		c.notice("autoresearch skipped: a fresh memory fact distinctively covers the goal")
 	}
 	if setup.blockReason != "" {
 		c.notice("legacy research archive resume failed: " + setup.blockReason)
@@ -2839,8 +2843,11 @@ func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResea
 		c.replaceLegacyRestore(legacyGoalRestore{taskID: setup.legacyTaskID, epoch: c.goals.continuationToken(), explicit: setup.explicit})
 		c.notice("legacy research archive resume failed: " + setup.blockReason)
 	} else {
-		path, data, ok = c.goals.set(resolved, setup.budgetClass, c.goalTodos())
+		path, data, ok = c.goals.set(resolved, setup.budgetClass, setup.researchSkippedByFact, c.goalTodos())
 		c.replaceLegacyRestore(legacyGoalRestore{})
+	}
+	if setup.researchSkippedByFact {
+		c.notice("autoresearch skipped: a fresh memory fact distinctively covers the goal")
 	}
 	c.persistGoalState(path, data, ok)
 }
@@ -2852,10 +2859,17 @@ type goalSetSetup struct {
 	blockReason  string
 	legacyTaskID string
 	explicit     bool
+	// researchSkippedByFact is set by the п.2 fact gate (see factCoversGoal):
+	// heuristic Auto research was demoted because a fresh distinctive memory
+	// fact covers the goal. Only Auto mode is ever gated.
+	researchSkippedByFact bool
 }
 
 func (c *Controller) resolveGoalText(goal string, researchMode GoalResearchMode) (string, goalSetSetup) {
-	setup := goalSetSetup{budgetClass: budgetClassForLegacyMode(goal, researchMode)}
+	// П.2 fact gate: demote heuristic Auto research when a fresh distinctive
+	// memory fact covers the goal. Explicit --research (On/Off) is never gated.
+	factCovers := c.factCoversGoal(goal, researchMode)
+	setup := goalSetSetup{budgetClass: budgetClassForLegacyMode(goal, researchMode, factCovers), researchSkippedByFact: factCovers}
 	legacy := c.prepareLegacyResearchTask(goal)
 	if !legacy.explicit {
 		return goal, setup
@@ -2866,6 +2880,21 @@ func (c *Controller) resolveGoalText(goal string, researchMode GoalResearchMode)
 	}
 	setup.budgetClass = budgetClassResearch
 	return legacy.goal, setup
+}
+
+// factGateApplies is the pure п.2 fact-gate decision (multica stack): heuristic
+// Auto research would engage AND a strong memory fact covers the goal. Explicit
+// --research (GoalResearchOn) and --no-research (GoalResearchOff) are never
+// gated, so a user who asks for research always gets it.
+func factGateApplies(goal string, researchMode GoalResearchMode, strong bool) bool {
+	return strong && researchMode == GoalResearchAuto && taskintent.ClassifyGoalBudget(goal) == taskintent.BudgetClassResearch
+}
+
+// factCoversGoal reports whether the п.2 fact gate applies to a goal: heuristic
+// Auto research is demoted because a fresh, distinctively matching memory fact
+// covers the goal (RecallResult.Strong from the authoritative tier).
+func (c *Controller) factCoversGoal(goal string, researchMode GoalResearchMode) bool {
+	return factGateApplies(goal, researchMode, c.memory.recall(goal).Strong)
 }
 
 // ResumeGoal re-enters a recoverable blocked/stopped Goal without resetting its
@@ -2912,7 +2941,7 @@ func (c *Controller) GoalRuntime() GoalRuntimeView {
 // turn/budget state, and the last
 // continuation reason. Every field is treated as untrusted by the evaluator.
 func (c *Controller) goalEvaluatorEvidence() goaleval.GoalEvidence {
-	goal, _ := c.goals.snapshot()
+	goal, _, _ := c.goals.snapshot()
 	ev := goaleval.GoalEvidence{
 		GoalContract:           goal,
 		LastContinuationReason: c.goals.lastContinuationReasonText(),

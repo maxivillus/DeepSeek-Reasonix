@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"reasonix/internal/config"
 	"reasonix/internal/memory"
 )
 
@@ -229,5 +230,65 @@ func TestRestoreMemoryQueuesAuditedRevisionForNextTurn(t *testing.T) {
 	composed := c.Compose("continue")
 	if !strings.Contains(composed, "Restored memory") || !strings.Contains(composed, "revision 3") {
 		t.Fatalf("restore note did not ride next turn: %q", composed)
+	}
+}
+
+// TestSaveMemoryDefaultsZeroTrustToHigh verifies that the management-surface
+// save (user-confirmed) promotes an unspecified trust to high, while an
+// explicitly set trust (the incremental auto-extractor) is preserved.
+func TestSaveMemoryDefaultsZeroTrustToHigh(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	userDir := filepath.Join(root, "rxhome")
+	set := memory.Load(memory.Options{CWD: root, UserDir: userDir})
+	m := newMemoryManager(set)
+
+	// Zero trust → high (user-confirmed panel save).
+	path, err := m.saveMemory(memory.Memory{Name: "panel-save", Description: "panel fact", Body: "saved from the memory panel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "trust: high") {
+		t.Fatalf("panel save must persist trust: high, got:\n%s", b)
+	}
+
+	// Explicit medium (incremental extractor) → preserved.
+	path2, err := m.saveMemory(memory.Memory{
+		Name: "auto-save", Description: "auto fact", Body: "extracted incrementally",
+		Trust: memory.TrustMedium,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, err := os.ReadFile(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b2), "trust: medium") {
+		t.Fatalf("explicit medium must be preserved, got:\n%s", b2)
+	}
+}
+
+// TestSaveMemoryWorkspaceSlugKeepsStoreConsistent guards the store location
+// used by the two tests above (memory.Load resolves the same slug).
+func TestSaveMemoryWorkspaceSlugKeepsStoreConsistent(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	userDir := filepath.Join(root, "rxhome")
+	set := memory.Load(memory.Options{CWD: root, UserDir: userDir})
+	if set == nil {
+		t.Fatal("memory.Load returned nil set")
+	}
+	want := filepath.Join(userDir, "projects", config.WorkspaceSlug(root), "memory")
+	if set.Store.Dir != want {
+		t.Fatalf("store dir = %q, want %q", set.Store.Dir, want)
 	}
 }
