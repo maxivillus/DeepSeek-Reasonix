@@ -1,15 +1,16 @@
 package memory
 
 // mcp_sync.go — dual-write авто-извлечённых фактов в общий memory-mcp
-// (SQLite+FTS5, канон ~/original/custom/memory-mcp/memory_mcp.py).
+// (SQLite+FTS5; сервер: github.com/maxivillus/memory-mcp).
 //
 // Фаза 2 (2026-08-15): нативная запись остаётся (Store.SaveWithOptions),
 // параллельно факты пишутся в memory-mcp (shared store, кросс-рантайм).
 //
 // Включение: REASONIX_MEMORY_MCP=1 (иначе всё — no-op).
-//   MEMORY_MCP_CMD — команда сервера (default /home/<user>/.local/bin/memory-mcp)
-//   MEMORY_MCP_DB  — путь БД (default ~/shared-store/facts.db;
-//                    в docker-рантаймах задаётся bind-mount'ом).
+//   MEMORY_MCP_CMD — команда сервера (default "memory-mcp" из PATH)
+//   MEMORY_MCP_DB  — путь БД (default ~/.local/share/memory-mcp/facts.db;
+//                    XDG-стиль, без хостовых путей; в рантаймах стека
+//                    задаётся явно — общая БД через bind-mount).
 //
 // Запись best-effort: при любой ошибке — stderr + return error; вызывающие
 // игнорируют (нативная запись уже выполнена, MCP-синк не блокирует экстракцию).
@@ -22,15 +23,25 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	mcpDefaultCmd  = "/home/<user>/.local/bin/memory-mcp"
-	mcpDefaultDB   = "/home/<user>/shared-store/facts.db"
+	// mcpDefaultCmd resolves via PATH on every machine; the host stack overrides
+	// with MEMORY_MCP_CMD=/home/<user>/.local/bin/memory-mcp.
+	mcpDefaultCmd  = "memory-mcp"
 	mcpSyncTimeout = 60 * time.Second
 )
+
+// mcpDefaultDB returns an XDG-style user data path (no host paths baked in).
+func mcpDefaultDB() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".local", "share", "memory-mcp", "facts.db")
+	}
+	return "memory-mcp-facts.db" // last resort: relative to CWD
+}
 
 func mcpSyncEnabled() bool { return os.Getenv("REASONIX_MEMORY_MCP") == "1" }
 
@@ -67,7 +78,7 @@ func SyncFactsToMCP(memories []Memory, source string) error {
 	}
 	db := os.Getenv("MEMORY_MCP_DB")
 	if db == "" {
-		db = mcpDefaultDB
+		db = mcpDefaultDB()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mcpSyncTimeout)
 	defer cancel()
