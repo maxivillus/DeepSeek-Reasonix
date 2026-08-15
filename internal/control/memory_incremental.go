@@ -94,6 +94,7 @@ func (c *Controller) incrementalExtractOnce(ctx context.Context, growth int, las
 	}
 	filtered := memory.FilterExtractedFacts(facts, set.Store, memory.ExtractMax())
 	mode := memory.GlobalWriteMode()
+	var synced []memory.Memory
 	for _, f := range filtered {
 		fact := memory.Memory{
 			Name:        memory.ExtractFactName(f),
@@ -107,12 +108,16 @@ func (c *Controller) incrementalExtractOnce(ctx context.Context, growth int, las
 		if mode == "global" || mode == "duplicate" {
 			fact.Scope = memory.FactScopeGlobal
 			_, _ = c.memory.saveMemory(fact)
+			synced = append(synced, fact)
 		}
 		if mode == "project" || mode == "duplicate" {
 			fact.Scope = memory.FactScopeProject
 			_, _ = c.memory.saveMemory(fact)
+			synced = append(synced, fact)
 		}
 	}
+	// Фаза 2 (2026-08-15): dual-write в общий memory-mcp (env REASONIX_MEMORY_MCP=1).
+	_ = memory.SyncFactsToMCP(synced, "incremental")
 }
 
 func envPositiveInt(name string, def int) int {

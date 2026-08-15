@@ -191,11 +191,10 @@ func FilterExtractedFacts(facts []ExtractFact, store Store, max int) []ExtractFa
 	return out
 }
 
-// SaveExtractedFacts сохраняет факты по mode (project|global|duplicate) через
-// штатный SaveWithOptions (тот же путь, что remember). Возвращает число
-// сохранённых записей.
-func SaveExtractedFacts(store Store, facts []ExtractFact, mode string) (int, error) {
-	saved := 0
+// buildExtractedMemories собирает Memory из ExtractFact по mode
+// (project|global|duplicate) — общая логика для SaveExtractedFacts и MCP-синка.
+func buildExtractedMemories(facts []ExtractFact, mode string) []Memory {
+	var out []Memory
 	for _, f := range facts {
 		m := Memory{
 			Name:        slug(firstNonEmpty(f.Title, f.Description)),
@@ -209,15 +208,24 @@ func SaveExtractedFacts(store Store, facts []ExtractFact, mode string) (int, err
 		}
 		if mode == "global" || mode == "duplicate" {
 			m.Scope = FactScopeGlobal
-			if _, err := store.SaveWithOptions(m, SaveOptions{}); err == nil {
-				saved++
-			}
+			out = append(out, m)
 		}
 		if mode == "project" || mode == "duplicate" {
 			m.Scope = FactScopeProject
-			if _, err := store.SaveWithOptions(m, SaveOptions{}); err == nil {
-				saved++
-			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// SaveExtractedFacts сохраняет факты по mode (project|global|duplicate) через
+// штатный SaveWithOptions (тот же путь, что remember). Возвращает число
+// сохранённых записей.
+func SaveExtractedFacts(store Store, facts []ExtractFact, mode string) (int, error) {
+	saved := 0
+	for _, m := range buildExtractedMemories(facts, mode) {
+		if _, err := store.SaveWithOptions(m, SaveOptions{}); err == nil {
+			saved++
 		}
 	}
 	return saved, nil

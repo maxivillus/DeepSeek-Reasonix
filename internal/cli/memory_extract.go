@@ -92,6 +92,8 @@ func memoryExtractCommand(args []string) int {
 	set := memory.Load(memory.Options{CWD: dir, UserDir: config.MemoryUserDir()})
 	filtered := memory.FilterExtractedFacts(facts, set.Store, memory.ExtractMax())
 	saved, _ := memory.SaveExtractedFacts(set.Store, filtered, mode)
+	// Фаза 2 (2026-08-15): dual-write в общий memory-mcp (env REASONIX_MEMORY_MCP=1).
+	_ = memory.SyncExtractedFactsToMCP(filtered, mode, session)
 	memoryExtractAudit(session, dir, mode, len(facts), saved, "")
 	return 0
 }
