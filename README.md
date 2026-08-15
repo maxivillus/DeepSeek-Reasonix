@@ -43,6 +43,11 @@
 <h3 align="center">A coding agent you can leave running.</h3>
 <p align="center">One local engine, four ways in — terminal, desktop app, browser, or your editor over ACP. Plan mode, permissions, a workspace sandbox and per-turn checkpoints keep a long autonomous run something you can still read and undo.</p>
 
+> **Fork branch `main-v2-v1251`** — this fork adds a patch line with a memory
+> subsystem (auto-extraction, recall tiers, fact gate, storage trust, index
+> cap, shared-store dual-write) and read_file image-budget improvements.
+> Everything is opt-in via env vars. See [PATCHES.md](./PATCHES.md).
+
 <div align="center">
   <video src="https://github.com/user-attachments/assets/ab2f3878-e224-4931-8254-060e7695cfb9" controls preload="metadata" width="560"></video>
 </div>
