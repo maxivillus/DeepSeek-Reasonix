@@ -1,6 +1,6 @@
 # PATCHES.md — branch `main-v2-v1251`
 
-This fork branch tracks upstream `main-v2` (rebase on v1.25.1) plus **7 local
+This fork branch tracks upstream `main-v2` (rebase on v1.25.1) plus **9 local
 commits** that add a memory subsystem and read_file improvements, developed
 and verified for a long-running autonomous agent stack. Everything is opt-in
 via environment variables; default behavior is unchanged.
@@ -18,6 +18,8 @@ via environment variables; default behavior is unchanged.
 | `541b390dc` | memory | drop host-specific defaults in mcp_sync (portable) |
 | `f55069cf82` | memory | read shared memory-mcp store: prefix index (summarize_index, 4000 cap) + per-turn recall (search_facts), dual-read with native-wins dedup (step a) |
 | `f7d5cb3eb` | memory | server-side recall assembly: REASONIX_MEMORY_MCP_COMPOSE=1 uses compose_recall block (RRF lexical+semantic+graph, sessions, tiers); native fallback; RecallResult.Source |
+| `de72fef56` | memory | workspace-scoped server recall: REASONIX_MEMORY_MCP_WORKSPACE scopes compose_recall to one project |
+| `41054b39e` | memory | restore capped native index (IndexMaxChars=4000, freshest-first, 120-rune clip) — lost in rebase `c5f6cec3d` |
 
 ## read_file improvements
 
@@ -62,11 +64,15 @@ re-research what memory already answers authoritatively.
 Facts carry `TrustLevel` high/medium/low with retrieval multiplier 1.5/1.0/0.7;
 `low`-trust facts are excluded from the authoritative tier.
 
-### 5. Index cap (`REASONIX_MEMORY_INDEX_CAP`)
+### 5. Index cap
 
 The background memory index in the cache-stable prefix is capped at
 `IndexMaxChars = 4000`, one line per memory, description clipped at 120
-graphemes, freshest-first, so a growing store cannot bloat the prompt prefix.
+runes, freshest-first, so a growing store cannot bloat the prompt prefix.
+Always on (not env-gated). The cap was lost in the v1.25.1 rebase
+(`c5f6cec3d` listed it but no cap code landed — the native index stayed
+unbounded, ~35KB for a large store) and restored in `41054b39e`; the shared
+memory-mcp `summarize_index` path applies the same budget.
 
 ### 6. memory-mcp dual-write (`REASONIX_MEMORY_MCP=1`)
 
