@@ -16,6 +16,7 @@ via environment variables; default behavior is unchanged.
 | `c5f6cec3d` | memory | rebase: port memory extract/recall-tiers/fact-gate/trust/index-cap |
 | `520eb44d0` | memory | dual-write extracted facts to shared memory-mcp (Phase 2) |
 | `541b390dc` | memory | drop host-specific defaults in mcp_sync (portable) |
+| `a82cfaa1e0` | memory | read shared memory-mcp store: prefix index (summarize_index, 4000 cap) + per-turn recall (search_facts), dual-read with native-wins dedup (step a) |
 
 ## read_file improvements
 
