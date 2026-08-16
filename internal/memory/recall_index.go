@@ -19,7 +19,58 @@ type RecallIndex struct {
 // BuildRecallIndex reads and tokenizes the recall pool once. A zero store
 // yields nil, which recall reports as an empty memory store.
 func BuildRecallIndex(store Store) *RecallIndex {
-	memories := recallMemories(store.ListAll())
+	return buildRecallIndexFromMemories(recallMemories(store.ListAll()))
+}
+
+// AutoRecall runs automatic recall against this snapshot's prebuilt index —
+// the per-turn path. Semantics are identical to the package-level AutoRecall.
+// When the shared memory-mcp store is enabled (REASONIX_MEMORY_MCP=1) the
+// matches are merged with a per-turn search_facts recall over the shared
+// store, so facts written by other runtimes surface here too (dual-read;
+// native hits win on duplicate text).
+func (s *Set) AutoRecall(query string, opts RecallOptions) RecallResult {
+	result := RecallResult{Query: strings.TrimSpace(query), CharBudget: recallCharBudget(opts.MaxChars)}
+	if genericRecallQuery(result.Query) {
+		result.Suppressed = "generic user turn"
+		return result
+	}
+	if s == nil {
+		result.Suppressed = "memory store is empty"
+		return result
+	}
+	index := s.recall
+	if index == nil {
+		// Hand-built sets (tests, embedders) carry no prebuilt index; the
+		// Load path always does, so per-turn recall stays disk-free there.
+		index = BuildRecallIndex(s.Store)
+	}
+	queryTerms, err := retrieval.QueryTerms(result.Query)
+	if err != nil {
+		result.Suppressed = "no searchable terms"
+		return result
+	}
+	var hits []RecallHit
+	if index != nil && len(index.docs) > 0 {
+		result.ShadowHits = shadowRankV2(result.Query, index.fielded)
+		hits = scoreRecallDocs(index.docs, result.Query, queryTerms, opts.Now)
+	}
+	if mcpSyncEnabled() {
+		hits = append(hits, mcpRecallHits(result.Query, queryTerms, opts.Now, hits)...)
+	}
+	if len(hits) == 0 {
+		if index == nil || len(index.docs) == 0 {
+			result.Suppressed = "memory store is empty"
+		} else {
+			result.Suppressed = "no sufficiently distinctive match"
+		}
+		return result
+	}
+	return finalizeRecall(result, hits, opts)
+}
+
+// buildRecallIndexFromMemories builds a recall index from an ad-hoc fact list
+// (e.g. memory-mcp search results). Returns nil when nothing is searchable.
+func buildRecallIndexFromMemories(memories []Memory) *RecallIndex {
 	if len(memories) == 0 {
 		return nil
 	}
@@ -41,26 +92,8 @@ func BuildRecallIndex(store Store) *RecallIndex {
 			length: len(terms),
 		})
 	}
+	if len(index.docs) == 0 {
+		return nil
+	}
 	return index
-}
-
-// AutoRecall runs automatic recall against this snapshot's prebuilt index —
-// the per-turn path. Semantics are identical to the package-level AutoRecall.
-func (s *Set) AutoRecall(query string, opts RecallOptions) RecallResult {
-	result := RecallResult{Query: strings.TrimSpace(query), CharBudget: recallCharBudget(opts.MaxChars)}
-	if genericRecallQuery(result.Query) {
-		result.Suppressed = "generic user turn"
-		return result
-	}
-	if s == nil {
-		result.Suppressed = "memory store is empty"
-		return result
-	}
-	index := s.recall
-	if index == nil {
-		// Hand-built sets (tests, embedders) carry no prebuilt index; the
-		// Load path always does, so per-turn recall stays disk-free there.
-		index = BuildRecallIndex(s.Store)
-	}
-	return autoRecallIndexed(index, result, opts)
 }

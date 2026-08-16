@@ -169,12 +169,23 @@ func autoRecallIndexed(index *RecallIndex, result RecallResult, opts RecallOptio
 		result.Suppressed = "no searchable terms"
 		return result
 	}
-	docs := index.docs
-	if len(docs) == 0 {
+	if len(index.docs) == 0 {
 		result.Suppressed = "memory store is empty"
 		return result
 	}
+	hits := scoreRecallDocs(index.docs, result.Query, queryTerms, opts.Now)
+	if len(hits) == 0 {
+		result.Suppressed = "no sufficiently distinctive match"
+		return result
+	}
+	return finalizeRecall(result, hits, opts)
+}
 
+// scoreRecallDocs scores the pool: BM25, project boost, freshness, and trust
+// weighting. Unordered and uncapped — finalizeRecall sorts, limits, and builds
+// the provider-visible block. Shared by the native pool and ad-hoc pools (e.g.
+// memory-mcp search results) so cross-runtime facts score identically.
+func scoreRecallDocs(docs []autoRecallDoc, query string, queryTerms []string, now time.Time) []RecallHit {
 	counts := make([]map[string]int, 0, len(docs))
 	totalLen := 0
 	for _, doc := range docs {
@@ -183,7 +194,6 @@ func autoRecallIndexed(index *RecallIndex, result RecallResult, opts RecallOptio
 	}
 	df := retrieval.DocumentFrequency(counts)
 	avgLen := float64(totalLen) / float64(len(docs))
-	now := opts.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -191,7 +201,7 @@ func autoRecallIndexed(index *RecallIndex, result RecallResult, opts RecallOptio
 	var hits []RecallHit
 	for _, doc := range docs {
 		matched := matchedRecallTerms(queryTerms, doc.counts)
-		if !strongRecallMatch(result.Query, queryTerms, matched) {
+		if !strongRecallMatch(query, queryTerms, matched) {
 			continue
 		}
 		score := retrieval.BM25Score(doc.counts, doc.length, queryTerms, df, len(docs), avgLen)
@@ -218,16 +228,18 @@ func autoRecallIndexed(index *RecallIndex, result RecallResult, opts RecallOptio
 			Score:     score,
 			Freshness: freshness,
 			Reason:    recallReason(matched, doc.memory.Scope),
-			Snippet:   retrieval.MakeSnippet(doc.text, result.Query, queryTerms, maxAutoRecallSnippetRunes),
+			Snippet:   retrieval.MakeSnippet(doc.text, query, queryTerms, maxAutoRecallSnippetRunes),
 			// Authoritative tier: not stale (fresh window), not low-trust, AND a
 			// distinctive lexical match, so the fact is safe to rely on directly.
-			Confident: freshness == FreshnessFresh && NormalizeTrust(string(doc.memory.Trust)) != TrustLow && authoritativeRecallMatch(result.Query, queryTerms, matched),
+			Confident: freshness == FreshnessFresh && NormalizeTrust(string(doc.memory.Trust)) != TrustLow && authoritativeRecallMatch(query, queryTerms, matched),
 		})
 	}
-	if len(hits) == 0 {
-		result.Suppressed = "no sufficiently distinctive match"
-		return result
-	}
+	return hits
+}
+
+// finalizeRecall sorts, trims to the relative-score band and limit, builds the
+// provider-visible block, and tallies the tier/omission telemetry.
+func finalizeRecall(result RecallResult, hits []RecallHit, opts RecallOptions) RecallResult {
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].Score != hits[j].Score {
 			return hits[i].Score > hits[j].Score

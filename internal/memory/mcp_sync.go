@@ -72,55 +72,20 @@ func SyncFactsToMCP(memories []Memory, source string) error {
 	if !mcpSyncEnabled() || len(memories) == 0 {
 		return nil
 	}
-	cmdStr := os.Getenv("MEMORY_MCP_CMD")
-	if cmdStr == "" {
-		cmdStr = mcpDefaultCmd
-	}
-	db := os.Getenv("MEMORY_MCP_DB")
-	if db == "" {
-		db = mcpDefaultDB()
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), mcpSyncTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, cmdStr)
-	cmd.Env = append(os.Environ(), "MEMORY_MCP_DB="+db)
-	stdin, err := cmd.StdinPipe()
+	sess, err := startMCPSession(ctx)
 	if err != nil {
 		return err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("mcp start: %w", err)
-	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	defer sess.close()
 
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1024*1024), 4*1024*1024)
-
-	if err := writeMCPRPC(stdin, 1, "initialize", map[string]any{
-		"protocolVersion": "2024-11-05",
-		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "reasonix-memory-sync", "version": "1"},
-	}); err != nil {
-		return err
-	}
-	if _, err := waitMCPRPC(sc, 1); err != nil {
-		return fmt.Errorf("mcp init: %w (stderr: %s)", err, stderr.String())
-	}
-
-	id := 1
 	for _, m := range memories {
 		text := strings.TrimSpace(firstNonEmpty(m.Body, m.Description, m.Title))
 		if text == "" {
 			continue
 		}
-		id++
 		args := map[string]any{
 			"text":    text,
 			"source":  source,
@@ -129,20 +94,102 @@ func SyncFactsToMCP(memories []Memory, source string) error {
 			"project": string(m.Scope),
 			"strong":  m.Trust == TrustHigh,
 		}
-		if err := writeMCPRPC(stdin, id, "tools/call", map[string]any{
+		if _, err := sess.call(ctx, "tools/call", map[string]any{
 			"name": "remember_fact", "arguments": args,
 		}); err != nil {
-			return err
-		}
-		if _, err := waitMCPRPC(sc, id); err != nil {
 			head := text
 			if len(head) > 40 {
 				head = head[:40]
 			}
-			return fmt.Errorf("mcp remember(%s): %w (stderr: %s)", head, err, stderr.String())
+			return fmt.Errorf("mcp remember(%s): %w", head, err)
 		}
 	}
 	return nil
+}
+
+// mcpSession is one stdio MCP server session (newline-delimited JSON-RPC 2.0).
+// Write (remember_fact) and read (summarize_index, search_facts) paths share
+// it so both reuse the same spawn/init/call plumbing.
+type mcpSession struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	sc     *bufio.Scanner
+	stderr strings.Builder
+	nextID int
+}
+
+// startMCPSession spawns the server (MEMORY_MCP_CMD, fallback "memory-mcp" from
+// PATH; DB via MEMORY_MCP_DB, fallback XDG path) and completes initialize. The
+// caller must close() the session when done.
+func startMCPSession(ctx context.Context) (*mcpSession, error) {
+	cmdStr := os.Getenv("MEMORY_MCP_CMD")
+	if cmdStr == "" {
+		cmdStr = mcpDefaultCmd
+	}
+	db := os.Getenv("MEMORY_MCP_DB")
+	if db == "" {
+		db = mcpDefaultDB()
+	}
+	cmd := exec.CommandContext(ctx, cmdStr)
+	cmd.Env = append(os.Environ(), "MEMORY_MCP_DB="+db)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	sess := &mcpSession{cmd: cmd, stdin: stdin, nextID: 1}
+	sess.sc = bufio.NewScanner(stdout)
+	sess.sc.Buffer(make([]byte, 1024*1024), 4*1024*1024)
+	cmd.Stderr = &sess.stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("mcp start: %w", err)
+	}
+	if err := sess.init(); err != nil {
+		sess.close()
+		return nil, err
+	}
+	return sess, nil
+}
+
+func (s *mcpSession) init() error {
+	if err := writeMCPRPC(s.stdin, s.nextID, "initialize", map[string]any{
+		"protocolVersion": "2024-11-05",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "reasonix-memory", "version": "1"},
+	}); err != nil {
+		return err
+	}
+	id := s.nextID
+	s.nextID++
+	if _, err := waitMCPRPC(s.sc, id); err != nil {
+		return fmt.Errorf("mcp init: %w (stderr: %s)", err, s.stderr.String())
+	}
+	return nil
+}
+
+// call performs one RPC and returns the raw result object. For tools/call the
+// result is {"content":[{"type":"text","text":"<json>"}]}.
+func (s *mcpSession) call(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
+	id := s.nextID
+	s.nextID++
+	if err := writeMCPRPC(s.stdin, id, method, params); err != nil {
+		return nil, err
+	}
+	res, err := waitMCPRPC(s.sc, id)
+	if err != nil {
+		return nil, fmt.Errorf("mcp %s: %w (stderr: %s)", method, err, s.stderr.String())
+	}
+	return res, nil
+}
+
+func (s *mcpSession) close() {
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Wait()
+	}
 }
 
 func writeMCPRPC(w io.Writer, id int, method string, params any) error {
