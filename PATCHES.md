@@ -17,6 +17,7 @@ via environment variables; default behavior is unchanged.
 | `520eb44d0` | memory | dual-write extracted facts to shared memory-mcp (Phase 2) |
 | `541b390dc` | memory | drop host-specific defaults in mcp_sync (portable) |
 | `f55069cf82` | memory | read shared memory-mcp store: prefix index (summarize_index, 4000 cap) + per-turn recall (search_facts), dual-read with native-wins dedup (step a) |
+| `f7d5cb3eb` | memory | server-side recall assembly: REASONIX_MEMORY_MCP_COMPOSE=1 uses compose_recall block (RRF lexical+semantic+graph, sessions, tiers); native fallback; RecallResult.Source |
 
 ## read_file improvements
 
