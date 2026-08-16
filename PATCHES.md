@@ -19,7 +19,7 @@ via environment variables; default behavior is unchanged.
 | `f55069cf82` | memory | read shared memory-mcp store: prefix index (summarize_index, 4000 cap) + per-turn recall (search_facts), dual-read with native-wins dedup (step a) |
 | `f7d5cb3eb` | memory | server-side recall assembly: REASONIX_MEMORY_MCP_COMPOSE=1 uses compose_recall block (RRF lexical+semantic+graph, sessions, tiers); native fallback; RecallResult.Source |
 | `de72fef56` | memory | workspace-scoped server recall: REASONIX_MEMORY_MCP_WORKSPACE scopes compose_recall to one project |
-| `41054b39e` | memory | restore capped native index (IndexMaxChars=4000, freshest-first, 120-rune clip) — lost in rebase `c5f6cec3d` |
+| `9f5d025ae` | memory | restore capped native index (IndexMaxChars=4000, freshest-first, 120-rune clip) — lost in rebase `c5f6cec3d` |
 
 ## read_file improvements
 
@@ -71,7 +71,7 @@ The background memory index in the cache-stable prefix is capped at
 runes, freshest-first, so a growing store cannot bloat the prompt prefix.
 Always on (not env-gated). The cap was lost in the v1.25.1 rebase
 (`c5f6cec3d` listed it but no cap code landed — the native index stayed
-unbounded, ~35KB for a large store) and restored in `41054b39e`; the shared
+unbounded, ~35KB for a large store) and restored in `9f5d025ae`; the shared
 memory-mcp `summarize_index` path applies the same budget.
 
 ### 6. memory-mcp dual-write (`REASONIX_MEMORY_MCP=1`)
