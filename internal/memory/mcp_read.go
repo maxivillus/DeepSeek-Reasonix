@@ -258,9 +258,15 @@ func mcpComposeRecall(ctx context.Context, query string, limit, chars int) (stri
 		return "", err
 	}
 	defer sess.close()
+	args := map[string]any{"turn_text": query, "limit": limit, "chars": chars}
+	// REASONIX_MEMORY_MCP_WORKSPACE scopes server-side recall to one project
+	// (multica project_id); empty = shared pool only.
+	if ws := os.Getenv("REASONIX_MEMORY_MCP_WORKSPACE"); ws != "" {
+		args["workspace"] = ws
+	}
 	res, err := sess.call(ctx, "tools/call", map[string]any{
 		"name": "compose_recall",
-		"arguments": map[string]any{"turn_text": query, "limit": limit, "chars": chars},
+		"arguments": args,
 	})
 	if err != nil {
 		return "", err
