@@ -316,7 +316,8 @@ func TestAutoRecallTrustMultiplierAndEntry(t *testing.T) {
 		Body: "AuthHandler panics when session metadata is missing (low).",
 	})
 
-	result := AutoRecall(store, "AuthHandler panic issue 6928", RecallOptions{Now: now})
+	// explicit budget: this test checks trust ranking, not the default cap
+	result := AutoRecall(store, "AuthHandler panic issue 6928", RecallOptions{Now: now, MaxChars: 2400})
 	if len(result.Hits) < 3 {
 		t.Fatalf("expected 3 hits, got %d", len(result.Hits))
 	}

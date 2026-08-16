@@ -16,7 +16,7 @@ import (
 const (
 	defaultAutoRecallLimit    = 4
 	maxAutoRecallLimit        = 8
-	defaultAutoRecallChars    = 2400
+	defaultAutoRecallChars    = 1400 // audit NTL-615: 1000-1500 chars for per-turn recall
 	minAutoRecallChars        = 480
 	maxAutoRecallSnippetRunes = 520
 )
