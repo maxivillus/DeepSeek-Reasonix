@@ -206,3 +206,52 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// TestAutoRecallServerCompose: with REASONIX_MEMORY_MCP_COMPOSE=1 the recall
+// block comes from the server's compose_recall (one scoring pipeline).
+func TestAutoRecallServerCompose(t *testing.T) {
+	fakeMCPEnv(t)
+	t.Setenv("REASONIX_MEMORY_MCP_COMPOSE", "1")
+	set := Load(Options{CWD: t.TempDir(), UserDir: t.TempDir()})
+	result := set.AutoRecall("quantum widgets", RecallOptions{})
+	if result.Block() == "" {
+		t.Fatal("expected a server-composed block")
+	}
+	if !strings.Contains(result.Block(), "Fake shared fact about quantum widgets") {
+		t.Fatalf("block does not carry the server content: %s", result.Block())
+	}
+	if result.Source != "memory-mcp compose_recall" {
+		t.Fatalf("source = %q, want memory-mcp compose_recall", result.Source)
+	}
+	if len(result.Hits) != 0 {
+		t.Fatalf("server-composed block must not fabricate local hits, got %d", len(result.Hits))
+	}
+}
+
+// TestAutoRecallServerComposeFallback: when the server is unavailable the
+// compose path falls through to the native recall.
+func TestAutoRecallServerComposeFallback(t *testing.T) {
+	t.Setenv("REASONIX_MEMORY_MCP", "1")
+	t.Setenv("REASONIX_MEMORY_MCP_COMPOSE", "1")
+	t.Setenv("MEMORY_MCP_CMD", filepath.Join(t.TempDir(), "does-not-exist"))
+	t.Setenv("MEMORY_MCP_DB", filepath.Join(t.TempDir(), "facts.db"))
+	userDir := t.TempDir()
+	cwd := t.TempDir()
+	store := StoreFor(userDir, cwd)
+	if _, err := store.Save(Memory{
+		Name: "quantum-widgets", Title: "Quantum Widgets",
+		Description: "shared fact", Type: TypeProject, Scope: FactScopeProject,
+		Body: fakeMCPFact, UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	set := Load(Options{CWD: cwd, UserDir: userDir})
+	result := set.AutoRecall("quantum widgets", RecallOptions{})
+	if len(result.Hits) != 1 {
+		t.Fatalf("native fallback should recall the local fact, got %d hits (block: %s)",
+			len(result.Hits), result.Block())
+	}
+	if result.Source != "" {
+		t.Fatalf("fallback source = %q, want native (empty)", result.Source)
+	}
+}

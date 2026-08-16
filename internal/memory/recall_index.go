@@ -5,7 +5,10 @@
 package memory
 
 import (
+	"context"
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"reasonix/internal/retrieval"
 )
@@ -37,6 +40,23 @@ func (s *Set) AutoRecall(query string, opts RecallOptions) RecallResult {
 	if s == nil {
 		result.Suppressed = "memory store is empty"
 		return result
+	}
+	// Server-side recall assembly (REASONIX_MEMORY_MCP_COMPOSE=1): the shared
+	// store's compose_recall builds the whole block (RRF lexical+semantic+
+	// graph, session expansion, tiers) — one scoring pipeline for every
+	// runtime. Best-effort: any failure falls through to the native path.
+	if mcpComposeEnabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), mcpReadTimeout)
+		defer cancel()
+		if block, err := mcpComposeRecall(ctx, result.Query,
+			recallLimit(opts.Limit), result.CharBudget); err == nil && block != "" {
+			result.block = block
+			result.UsedChars = utf8.RuneCountInString(block)
+			result.Source = "memory-mcp compose_recall"
+			return result
+		} else if err != nil {
+			mcpWarn(fmt.Errorf("compose_recall unavailable (native recall used): %w", err))
+		}
 	}
 	index := s.recall
 	if index == nil {

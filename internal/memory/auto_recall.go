@@ -73,6 +73,10 @@ type RecallResult struct {
 	// distinctive match) was selected — a fact safe to rely on directly.
 	Strong bool
 
+	// Source records where the block came from: "" (native), "memory-mcp
+	// compose_recall", or "memory-mcp search_facts merge". Diagnostics only.
+	Source string
+
 	block string
 }
 

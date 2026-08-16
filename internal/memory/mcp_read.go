@@ -240,3 +240,40 @@ func mcpRecallHits(query string, queryTerms []string, now time.Time, native []Re
 func recallDedupKey(text string) string {
 	return strings.ToLower(strings.Join(strings.Fields(text), " "))
 }
+
+// mcpComposeEnabled gates the server-side recall assembly: with
+// REASONIX_MEMORY_MCP_COMPOSE=1 (and MCP read enabled), AutoRecall asks the
+// server for a ready-to-inject <memory-recall> block instead of scoring
+// locally — one scoring pipeline for every runtime.
+func mcpComposeEnabled() bool {
+	return mcpSyncEnabled() && os.Getenv("REASONIX_MEMORY_MCP_COMPOSE") == "1"
+}
+
+// mcpComposeRecall builds the provider-visible recall block server-side
+// (compose_recall tool: RRF over lexical + semantic + entity graph, session
+// expansion, authoritative/background tiers).
+func mcpComposeRecall(ctx context.Context, query string, limit, chars int) (string, error) {
+	sess, err := startMCPSession(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer sess.close()
+	res, err := sess.call(ctx, "tools/call", map[string]any{
+		"name": "compose_recall",
+		"arguments": map[string]any{"turn_text": query, "limit": limit, "chars": chars},
+	})
+	if err != nil {
+		return "", err
+	}
+	var tool mcpToolResult
+	if err := json.Unmarshal(res, &tool); err != nil || len(tool.Content) == 0 {
+		return "", fmt.Errorf("unexpected compose_recall response")
+	}
+	var out struct {
+		Block string `json:"block"`
+	}
+	if err := json.Unmarshal([]byte(tool.Content[0].Text), &out); err != nil {
+		return "", fmt.Errorf("parse compose_recall: %w", err)
+	}
+	return strings.TrimSpace(out.Block), nil
+}
