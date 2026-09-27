@@ -43,7 +43,7 @@ func render(m Memory, name string) string {
 		Keywords: oneLine(m.Keywords), Activation: string(NormalizeActivation(string(m.Activation))),
 		Volatility: string(NormalizeVolatility(string(m.Volatility))),
 		SubjectKey: NormalizeSubjectKey(m.SubjectKey),
-		Trust: string(m.Trust),
+		Trust:      string(m.Trust),
 	}
 	if !m.CreatedAt.IsZero() {
 		fm.CreatedAt = m.CreatedAt.UTC().Format(time.RFC3339Nano)

@@ -265,7 +265,7 @@ func mcpComposeRecall(ctx context.Context, query string, limit, chars int) (stri
 		args["workspace"] = ws
 	}
 	res, err := sess.call(ctx, "tools/call", map[string]any{
-		"name": "compose_recall",
+		"name":      "compose_recall",
 		"arguments": args,
 	})
 	if err != nil {

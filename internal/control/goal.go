@@ -88,7 +88,7 @@ type goalMachine struct {
 	// heuristic Auto research was demoted because a fresh, distinctively
 	// matching memory fact covers it (see factCoversGoal).
 	researchSkippedByFact bool
-	continuationEpoch  uint64
+	continuationEpoch     uint64
 
 	tokenBudget int // configured ceiling for an unattended loop; 0 = unbounded
 
@@ -131,18 +131,18 @@ type goalMachine struct {
 // safe-to-omit JSON: old readers ignore them, and restoreFromState re-derives
 // defaults when they are missing.
 type goalState struct {
-	Goal               string                      `json:"goal,omitempty"`
-	Status             string                      `json:"status,omitempty"`
-	ResearchMode       GoalResearchMode            `json:"researchMode,omitempty"`
-	AutoResearchTaskID string                      `json:"autoResearchTaskID,omitempty"`
-	ScopeID            string                      `json:"scopeID,omitempty"`
-	DeliveryCheckpoint evidence.DeliveryCheckpoint `json:"deliveryCheckpoint,omitempty"`
-	Turns              int                         `json:"turns,omitempty"`
-	Blocks             int                         `json:"blocks,omitempty"`
-	Block              string                      `json:"block,omitempty"`
-	Strict             bool                        `json:"strict,omitempty"`
+	Goal                  string                      `json:"goal,omitempty"`
+	Status                string                      `json:"status,omitempty"`
+	ResearchMode          GoalResearchMode            `json:"researchMode,omitempty"`
+	AutoResearchTaskID    string                      `json:"autoResearchTaskID,omitempty"`
+	ScopeID               string                      `json:"scopeID,omitempty"`
+	DeliveryCheckpoint    evidence.DeliveryCheckpoint `json:"deliveryCheckpoint,omitempty"`
+	Turns                 int                         `json:"turns,omitempty"`
+	Blocks                int                         `json:"blocks,omitempty"`
+	Block                 string                      `json:"block,omitempty"`
+	Strict                bool                        `json:"strict,omitempty"`
 	ResearchSkippedByFact bool                        `json:"researchSkippedByFact,omitempty"`
-	Todos              []evidence.TodoItem         `json:"todos,omitempty"`
+	Todos                 []evidence.TodoItem         `json:"todos,omitempty"`
 
 	BudgetClass            string   `json:"budgetClass,omitempty"`
 	TurnsUsed              int      `json:"turnsUsed,omitempty"`

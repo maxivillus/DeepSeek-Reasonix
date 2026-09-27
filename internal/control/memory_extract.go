@@ -10,7 +10,6 @@ package control
 import (
 	"os"
 	"os/exec"
-	"syscall"
 )
 
 // memoryExtractSpawn is the Close-time seam. Tests replace it to assert the
@@ -30,9 +29,9 @@ func spawnMemoryExtract(sessionPath, workspaceRoot string) {
 		return
 	}
 	cmd := exec.Command(exe, "memory-extract", "--session", sessionPath, "--dir", workspaceRoot)
-	// Отдельная сессия (setsid): child не умирает вместе с родительским
-	// процессом/терминалом и не получает его stdin/stdout/stderr.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Detach the child from this process and its terminal. How that is spelled
+	// out is platform-specific — see detachMemoryExtract.
+	detachMemoryExtract(cmd)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil

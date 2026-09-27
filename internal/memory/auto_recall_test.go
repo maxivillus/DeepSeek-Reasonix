@@ -307,7 +307,7 @@ func TestAutoRecallTrustMultiplierAndEntry(t *testing.T) {
 		ID: "mem-med", Name: "authhandler-med", Title: "AuthHandler panic (medium)",
 		Description: "AuthHandler panic tracked by issue 6928", Type: TypeProject,
 		Scope: FactScopeProject,
-		Body: "AuthHandler panics when session metadata is missing (medium).",
+		Body:  "AuthHandler panics when session metadata is missing (medium).",
 	})
 	recallTestWrite(t, store.Dir, Memory{
 		ID: "mem-low", Name: "authhandler-low", Title: "AuthHandler panic (low)",

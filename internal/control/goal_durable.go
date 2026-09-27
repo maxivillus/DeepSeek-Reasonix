@@ -50,7 +50,7 @@ func (g *goalMachine) captureLocked() goalMachineSnapshot {
 		scopeID: g.scopeID, deliveryCheckpoint: g.deliveryCheckpoint,
 		block: g.block, strict: g.strict,
 		researchSkippedByFact: g.researchSkippedByFact,
-		budgetClass: g.budgetClass, turnsUsed: g.turnsUsed,
+		budgetClass:           g.budgetClass, turnsUsed: g.turnsUsed,
 		turnsLimit: g.turnsLimit, tokensUsed: g.tokensUsed,
 		requestsUsed:   g.requestsUsed,
 		workDurationMs: g.workDurationMs,
