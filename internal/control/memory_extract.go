@@ -1,0 +1,37 @@
+package control
+
+// Close() spawns `reasonix memory-extract` detached after the SessionEnd hooks,
+// so extraction outlives the parent. Enabled by REASONIX_MEMORY_EXTRACT=1; the
+// child reads the transcript and stores facts through the normal memory.Store.
+
+import (
+	"os"
+)
+
+// memoryExtractSpawn is the Close-time seam. Tests replace it to assert the
+// session-end trigger stays wired: the call site was silently lost in a rebase
+// once already, and nothing else would have noticed.
+var memoryExtractSpawn = spawnMemoryExtract
+
+func spawnMemoryExtract(sessionPath, workspaceRoot string) {
+	if os.Getenv("REASONIX_MEMORY_EXTRACT") != "1" {
+		return
+	}
+	if sessionPath == "" || workspaceRoot == "" {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	// Construction and detachment are platform-specific: see
+	// memoryExtractCommand in memory_extract_other.go / _windows.go.
+	cmd := memoryExtractCommand(exe, []string{"memory-extract", "--session", sessionPath, "--dir", workspaceRoot})
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	_ = cmd.Process.Release() // fire-and-forget: родитель выходит, init подберёт
+}

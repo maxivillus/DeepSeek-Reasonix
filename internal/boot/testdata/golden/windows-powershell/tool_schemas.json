@@ -280,7 +280,7 @@
   },
   {
     "Name": "read_file",
-    "Description": "Read one bounded text window with optional line offset/limit. Output prefixes each line with its 1-based number. Any successful window observes the current file version for later structured edits. Use the next-window hint to page only when more content is useful. Legacy intent and cursor fields are accepted as navigation hints and never create a whole-file completion requirement.",
+    "Description": "Read one bounded text window with optional line offset/limit. Output prefixes each line with its 1-based number. Any successful window observes the current file version for later structured edits. Use the next-window hint to page only when more content is useful. Legacy intent and cursor fields are accepted as navigation hints and never create a whole-file completion requirement. Raster images (PNG/JPEG/GIF/WebP) are handled specially: the image is clamped to 1568px and re-encoded as JPEG (quality 80).",
     "ReadOnly": true,
     "Schema": {
       "properties": {

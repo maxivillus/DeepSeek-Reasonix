@@ -96,7 +96,7 @@ func toolCallChunk(id, name, args string) provider.Chunk {
 }
 
 func TestActiveGoalBlockCarriesTaskContractAndPausePolicy(t *testing.T) {
-	block := activeGoalBlock("fix the parser")
+	block := activeGoalBlock("fix the parser", false)
 	for _, want := range []string{
 		"Treat the user's goal as a task contract",
 		"Context, Request, Output format, Constraints",

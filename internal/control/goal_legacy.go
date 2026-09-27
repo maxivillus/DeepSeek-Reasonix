@@ -20,7 +20,7 @@ func normalizeBudgetClass(goal, class string, legacyMode GoalResearchMode) strin
 		if strings.TrimSpace(goal) == "" && legacyMode != GoalResearchOn {
 			return ""
 		}
-		return budgetClassForLegacyMode(goal, legacyMode)
+		return budgetClassForLegacyMode(goal, legacyMode, false)
 	}
 }
 

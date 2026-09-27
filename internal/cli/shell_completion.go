@@ -59,8 +59,7 @@ func cliCompletionRootSpec() cliCompletionSpec {
 	model := completionFlag("--model", cliCompletionModelValue)
 	resume := completionFlag("--resume -r", cliCompletionOptionalValue) // optional QUERY
 	effort := completionFlag("--effort", cliCompletionStaticValue, "auto", "low", "medium", "high", "max")
-	permissionMode := completionFlag("--permission-mode", cliCompletionStaticValue,
-		"read-only", "workspace-write", "danger-full-access", "plan")
+	permissionMode := completionFlag("--permission-mode", cliCompletionStaticValue, "read-only", "workspace-write", "danger-full-access", "plan")
 	help := completionFlag("--help -h", cliCompletionNoValue)
 
 	interactiveFlags := []cliCompletionFlag{
@@ -127,6 +126,7 @@ func cliCompletionRootSpec() cliCompletionSpec {
 			completionSpec("telemetry", []cliCompletionFlag{help}),
 		),
 		completionSpec("init", []cliCompletionFlag{help}),
+		completionSpec("memory-extract", []cliCompletionFlag{help}),
 		completionSpec("acp", []cliCompletionFlag{
 			model,
 			completionFlag("--planner", cliCompletionStaticValue, "auto", "off"),

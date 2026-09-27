@@ -148,6 +148,9 @@ func RunWithBuildInfo(args []string, info BuildInfo) int {
 	case "acp":
 		configureCLIThemeFromConfig()
 		return acpCommand(rest, version)
+	case "memory-extract":
+		// Hidden child command spawned by Controller.Close.
+		return memoryExtractCommand(rest)
 	case "mcp":
 		configureCLIThemeFromConfig()
 		return mcpCommand(rest)

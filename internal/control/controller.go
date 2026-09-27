@@ -288,6 +288,11 @@ type Controller struct {
 	// surfaced to frontends via WorkspaceRoot().
 	workspaceRoot string
 
+	// incrementalStop cancels the mid-session memory-extraction ticker (Фаза B,
+	// 2026-08-11): started from New() once the session path is known, stopped in
+	// close(). Nil when extraction is disabled or the ticker never started.
+	incrementalStop context.CancelFunc
+
 	// externalFolderRefs maps session-generated @ tokens to user-dropped
 	// directories outside workspaceRoot. It is intentionally per-controller:
 	// dragging a folder authorizes that folder for this chat session only, without
@@ -908,6 +913,14 @@ func (c *Controller) initializeOwnedResources(opts Options) {
 	// Checkpoints: bind a store to the session and route writer pre-edits into it.
 	c.rebindCheckpoints(opts.SessionPath)
 	c.setActiveJobSession(opts.SessionPath)
+	// Фаза B (2026-08-11): инкрементальная экстракция памяти во время сессии.
+	// Env-gated (REASONIX_MEMORY_EXTRACT=1) inside the starter; the ticker reads
+	// the transcript only, so starting it here is safe.
+	if opts.SessionPath != "" {
+		incCtx, incCancel := context.WithCancel(context.Background())
+		c.incrementalStop = incCancel
+		c.startIncrementalExtraction(incCtx)
+	}
 	c.rebindInbox()
 	// Observe Steer / unapplied-steer for durable inbox state transitions.
 	// Must wrap both the controller sink and the executor sink: agent.Steer
@@ -2667,7 +2680,7 @@ func (c *Controller) SetGoal(goal string) {
 func (c *Controller) LoadInactiveGoal(goal string) {
 	c.goals.mu.Lock()
 	defer c.goals.mu.Unlock()
-	c.goals.installGoalLocked(strings.TrimSpace(goal), ClassifyGoalBudget(goal))
+	c.goals.installGoalLocked(strings.TrimSpace(goal), ClassifyGoalBudget(goal), false)
 	c.goals.disarmed = true
 }
 
@@ -2698,12 +2711,24 @@ func (c *Controller) SetGoalDurable(goal string) error {
 		if current != nil && current.Objective == goal && current.Phase == goaldomain.PhaseActive && current.Activation == goaldomain.ActivationArmed {
 			return nil
 		}
+		// fact gate: a fresh fact that covers the goal bounds the autonomous
+		// loop instead of the old research budget — the new runtime has no
+		// budget class and never creates autoresearch tasks.
+		researchSkippedByFact := c.factCoversGoal(goal, GoalResearchAuto)
+		var maxRoundLimit *uint64
+		if researchSkippedByFact {
+			limit := uint64(factGateRoundLimit)
+			maxRoundLimit = &limit
+		}
 		_, err = c.applyHostGoalMutation(context.Background(), "set", func(machine *goaldomain.Machine) (*goaldomain.View, error) {
-			created, createErr := machine.Replace(goaldomain.CreateRequest{Objective: goal})
+			created, createErr := machine.Replace(goaldomain.CreateRequest{Objective: goal, MaxGoalRounds: maxRoundLimit})
 			return &created, createErr
 		})
 		if err == nil {
 			c.resetGoalResourceBudget()
+			if researchSkippedByFact {
+				c.notice(fmt.Sprintf("autoresearch skipped: a fresh memory fact distinctively covers the goal; the autonomous loop is limited to %d rounds (raise it with /goal edit)", factGateRoundLimit))
+			}
 		}
 		return err
 	}
@@ -2717,7 +2742,7 @@ func (c *Controller) SetGoalDurable(goal string) error {
 		path, data, persist = c.goals.setLegacyArchiveBlockedWithTaskID(resolved, setup.budgetClass, setup.blockReason, setup.legacyTaskID)
 		c.replaceLegacyRestore(legacyGoalRestore{taskID: setup.legacyTaskID, epoch: c.goals.continuationToken(), explicit: setup.explicit})
 	} else {
-		path, data, persist = c.goals.set(resolved, setup.budgetClass)
+		path, data, persist = c.goals.set(resolved, setup.budgetClass, setup.researchSkippedByFact)
 		c.replaceLegacyRestore(legacyGoalRestore{})
 	}
 	if persist {
@@ -2734,6 +2759,9 @@ func (c *Controller) SetGoalDurable(goal string) error {
 	}
 	if setup.notice != "" {
 		c.notice(setup.notice)
+	}
+	if setup.researchSkippedByFact {
+		c.notice("autoresearch skipped: a fresh memory fact distinctively covers the goal")
 	}
 	if setup.blockReason != "" {
 		c.notice("legacy research archive resume failed: " + setup.blockReason)
@@ -2760,8 +2788,11 @@ func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResea
 		c.replaceLegacyRestore(legacyGoalRestore{taskID: setup.legacyTaskID, epoch: c.goals.continuationToken(), explicit: setup.explicit})
 		c.notice("legacy research archive resume failed: " + setup.blockReason)
 	} else {
-		path, data, ok = c.goals.set(resolved, setup.budgetClass)
+		path, data, ok = c.goals.set(resolved, setup.budgetClass, setup.researchSkippedByFact)
 		c.replaceLegacyRestore(legacyGoalRestore{})
+	}
+	if setup.researchSkippedByFact {
+		c.notice("autoresearch skipped: a fresh memory fact distinctively covers the goal")
 	}
 	c.persistGoalState(path, data, ok)
 }
@@ -2773,10 +2804,17 @@ type goalSetSetup struct {
 	blockReason  string
 	legacyTaskID string
 	explicit     bool
+	// researchSkippedByFact is set by the fact gate (see factCoversGoal):
+	// heuristic Auto research was demoted because a fresh distinctive memory
+	// fact covers the goal. Only Auto mode is ever gated.
+	researchSkippedByFact bool
 }
 
 func (c *Controller) resolveGoalText(goal string, researchMode GoalResearchMode) (string, goalSetSetup) {
-	setup := goalSetSetup{budgetClass: budgetClassForLegacyMode(goal, researchMode)}
+	// fact gate: demote heuristic Auto research when a fresh distinctive
+	// memory fact covers the goal. Explicit --research (On/Off) is never gated.
+	factCovers := c.factCoversGoal(goal, researchMode)
+	setup := goalSetSetup{budgetClass: budgetClassForLegacyMode(goal, researchMode, factCovers), researchSkippedByFact: factCovers}
 	legacy := c.prepareLegacyResearchTask(goal)
 	if !legacy.explicit {
 		return goal, setup
@@ -2787,6 +2825,26 @@ func (c *Controller) resolveGoalText(goal string, researchMode GoalResearchMode)
 	}
 	setup.budgetClass = budgetClassResearch
 	return legacy.goal, setup
+}
+
+// factGateRoundLimit bounds an autonomous Goal loop when the fact gate
+// fires on the session-engine path: enough rounds to answer from the covering
+// fact and verify it, far short of a research-class run. `/goal edit` lifts it.
+const factGateRoundLimit = 3
+
+// factGateApplies is the pure fact-gate decision (multica stack): heuristic
+// Auto research would engage AND a strong memory fact covers the goal. Explicit
+// --research (GoalResearchOn) and --no-research (GoalResearchOff) are never
+// gated, so a user who asks for research always gets it.
+func factGateApplies(goal string, researchMode GoalResearchMode, strong bool) bool {
+	return strong && researchMode == GoalResearchAuto && ClassifyGoalBudget(goal) == budgetClassResearch
+}
+
+// factCoversGoal reports whether the fact gate applies to a goal: heuristic
+// Auto research is demoted because a fresh, distinctively matching memory fact
+// covers the goal (RecallResult.Strong from the authoritative tier).
+func (c *Controller) factCoversGoal(goal string, researchMode GoalResearchMode) bool {
+	return factGateApplies(goal, researchMode, c.memory.recall(goal).Strong)
 }
 
 // ResumeGoal re-enters a recoverable blocked/stopped Goal without resetting its
@@ -5040,6 +5098,12 @@ func (c *Controller) finalizeControllerClose() {
 		if fireSessionEnd && started {
 			c.hooks.SessionEnd(context.Background(), "other")
 			c.extensionSessionEvent(extension.PointSessionEnd, dispatch.PhaseEnd, c.SessionPath())
+			// Фаза A (2026-08-11): авто-экстракция памяти в child-процессе.
+			memoryExtractSpawn(c.SessionPath(), c.workspaceRoot)
+		}
+		// Фаза B (2026-08-11): остановить инкрементальный тикер до выхода.
+		if c.incrementalStop != nil {
+			c.incrementalStop()
 		}
 		if c.background.scope != nil {
 			c.background.scope.Release(jobsMode == closeJobsAsync)

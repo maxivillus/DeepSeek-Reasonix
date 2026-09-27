@@ -91,6 +91,7 @@ type Memory struct {
 	ExpiresAt      time.Time  // hard freshness boundary; zero = never expires
 	LastVerifiedAt time.Time  // last explicit confirmation; renews the freshness clock
 	Keywords       string     // search aliases (bilingual synonyms, related commands); recall-only, never rendered into the index
+	Trust          TrustLevel // high (user-confirmed) / medium (default) / low; empty = medium
 	Body           string     // the fact itself (Markdown)
 }
 
@@ -717,6 +718,7 @@ func loadMemory(path string) (Memory, bool) {
 		LastVerifiedAt: parseMemoryTime(fm["last_verified_at"]),
 		Type:           persistedFactType(fm),
 		Scope:          factScopeFromFrontmatter(fm["scope"]),
+		Trust:          trustFromFrontmatter(fm["trust"]),
 		Body:           strings.TrimSpace(body),
 	}
 	if m.Name == "" {
@@ -778,6 +780,15 @@ func factScopeFromFrontmatter(s string) FactScope {
 	default:
 		return ""
 	}
+}
+
+// trustFromFrontmatter keeps the empty string (medium default) when the file
+// predates the trust field, so legacy facts behave exactly as before.
+func trustFromFrontmatter(s string) TrustLevel {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	return NormalizeTrust(s)
 }
 
 func (s Store) scopeForDir(dir string) FactScope {

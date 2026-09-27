@@ -152,7 +152,7 @@ func (c *Controller) Compose(text string) string {
 }
 
 func (c *Controller) compose(text, source string, includeHookContext bool) string {
-	goal, goalStatus := c.goals.snapshot()
+	goal, goalStatus, researchSkippedByFact := c.goals.snapshot()
 	if c.sessionEngineEnabled() {
 		if view, err := c.goalLifecycleView(); err == nil && view != nil {
 			goal = view.Objective
@@ -176,6 +176,7 @@ func (c *Controller) compose(text, source string, includeHookContext bool) strin
 		includeHookContext,
 		goal,
 		goalStatus,
+		researchSkippedByFact,
 	)
 }
 
@@ -183,6 +184,7 @@ func (c *Controller) composeWithGoal(
 	text, source string,
 	includeHookContext bool,
 	goal, goalStatus string,
+	researchSkippedByFact bool,
 ) string {
 	c.mu.Lock()
 	plan := c.sessionSettings.planMode
@@ -192,7 +194,7 @@ func (c *Controller) composeWithGoal(
 	notes := c.memory.drainPending()
 
 	if strings.TrimSpace(goal) != "" && goalStatus == GoalStatusRunning {
-		prefix := activeGoalBlock(goal)
+		prefix := activeGoalBlock(goal, researchSkippedByFact)
 		text = prefix + "\n\n" + text
 	}
 	if plan {
@@ -329,7 +331,7 @@ func (c *Controller) ComposeSynthetic(text string) string {
 	return agent.WithReasoningLanguageForSource(text, lang, text)
 }
 
-func activeGoalBlock(goal string) string {
+func activeGoalBlock(goal string, researchSkippedByFact bool) string {
 	goal = strings.TrimSpace(goal)
 	goal = strings.ReplaceAll(goal, activeGoalClose, "<\\/active-goal>")
 	var b strings.Builder
@@ -339,9 +341,21 @@ func activeGoalBlock(goal string) string {
 	b.WriteString("\n\n")
 	b.WriteString(goalTaskContractInstructions)
 	b.WriteString("\n")
+	if researchSkippedByFact {
+		// fact gate: a fresh distinctive memory fact covers this goal, so
+		// heuristic Auto research was demoted. Tell the model why there is no
+		// research-class budget and how to escalate when the fact is stale.
+		b.WriteString(factGateGoalMarker)
+		b.WriteString("\n")
+	}
 	b.WriteString(activeGoalClose)
 	return b.String()
 }
+
+// factGateGoalMarker explains the fact-gate demotion inside the active-goal
+// block (multica stack). The model sees it only when heuristic Auto research
+// was skipped because a strong fresh memory fact covered the goal.
+const factGateGoalMarker = `Auto-research was skipped for this goal: a fresh memory fact distinctively covers it. Answer from the fact. If the fact is insufficient, contradicted, or the user explicitly asks for research — say so and request research explicitly.`
 
 const goalTaskContractInstructions = `Goal mode: pursue this goal autonomously. Treat the user's goal as a task contract:
 - Honor Context, Request, Output format, Constraints, and Checkpoint/Pause policy sections when present; otherwise infer a lightweight contract from the conversation and workspace.

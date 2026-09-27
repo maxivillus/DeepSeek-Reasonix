@@ -47,7 +47,7 @@ const (
 
 // budgetClassForLegacyMode translates old sidecars and deprecated CLI flags at
 // the compatibility boundary. The active Goal runtime stores only budgetClass.
-func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode) string {
+func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode, researchSkippedByFact bool) string {
 	switch researchMode {
 	case GoalResearchOn:
 		return budgetClassResearch
@@ -57,8 +57,25 @@ func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode) string
 		}
 		return budgetClassSimple
 	default:
+		// fact gate: heuristic Auto research is demoted to a write budget when a
+		// fresh distinctive fact covers the goal; explicit --research is never
+		// gated.
+		if researchSkippedByFact {
+			if GoalNeedsWriteBudget(goal) {
+				return budgetClassWrite
+			}
+			return budgetClassSimple
+		}
 		return ClassifyGoalBudget(goal)
 	}
+}
+
+// goalPolicyState holds the goal's independent booleans: strict mode and the
+// fact-gate demotion of heuristic Auto research (see factCoversGoal), which
+// share a lifetime and are only meaningful together.
+type goalPolicyState struct {
+	strict                bool
+	researchSkippedByFact bool
 }
 
 // goalMachine owns the active goal FSM and its persistence. It is a strict
@@ -73,8 +90,10 @@ type goalMachine struct {
 	scopeID            string
 	deliveryCheckpoint evidence.DeliveryCheckpoint
 	block              string
-	strict             bool
-	continuationEpoch  uint64
+	// goalPolicyState carries the goal's independent booleans. Grouping them by
+	// lifetime keeps the machine's scalar state countable.
+	goalPolicyState
+	continuationEpoch uint64
 
 	tokenBudget int // configured ceiling for an unattended loop; 0 = unbounded
 
@@ -100,10 +119,9 @@ type goalMachine struct {
 	// stateExtra preserves fields written by a newer peer during read/modify/
 	// write cycles. Known current fields always win on serialization.
 	stateExtra map[string]json.RawMessage
-	// legacyTaskID is retained only while a historical AutoResearch archive is
-	// awaiting migration. It is serialized on fail-closed blocked sidecars so a
-	// restart can retry the migration without treating the raw archive path as a
-	// new Goal.
+	// legacyTaskID is retained only while a historical AutoResearch archive
+	// awaits migration; fail-closed blocked sidecars serialize it so a restart
+	// can retry the migration.
 	legacyTaskID string
 
 	// statePath is the persisted goal-state sidecar; empty disables persistence.
@@ -117,17 +135,18 @@ type goalMachine struct {
 // safe-to-omit JSON: old readers ignore them, and restoreFromState re-derives
 // defaults when they are missing.
 type goalState struct {
-	Goal               string                      `json:"goal,omitempty"`
-	Status             string                      `json:"status,omitempty"`
-	ResearchMode       GoalResearchMode            `json:"researchMode,omitempty"`
-	AutoResearchTaskID string                      `json:"autoResearchTaskID,omitempty"`
-	ScopeID            string                      `json:"scopeID,omitempty"`
-	DeliveryCheckpoint evidence.DeliveryCheckpoint `json:"deliveryCheckpoint,omitempty"`
-	Turns              int                         `json:"turns,omitempty"`
-	Blocks             int                         `json:"blocks,omitempty"`
-	Block              string                      `json:"block,omitempty"`
-	Strict             bool                        `json:"strict,omitempty"`
-	Todos              []evidence.TodoItem         `json:"todos,omitempty"`
+	Goal                  string                      `json:"goal,omitempty"`
+	Status                string                      `json:"status,omitempty"`
+	ResearchMode          GoalResearchMode            `json:"researchMode,omitempty"`
+	AutoResearchTaskID    string                      `json:"autoResearchTaskID,omitempty"`
+	ScopeID               string                      `json:"scopeID,omitempty"`
+	DeliveryCheckpoint    evidence.DeliveryCheckpoint `json:"deliveryCheckpoint,omitempty"`
+	Turns                 int                         `json:"turns,omitempty"`
+	Blocks                int                         `json:"blocks,omitempty"`
+	Block                 string                      `json:"block,omitempty"`
+	Strict                bool                        `json:"strict,omitempty"`
+	ResearchSkippedByFact bool                        `json:"researchSkippedByFact,omitempty"`
+	Todos                 []evidence.TodoItem         `json:"todos,omitempty"`
 
 	BudgetClass            string   `json:"budgetClass,omitempty"`
 	TurnsUsed              int      `json:"turnsUsed,omitempty"`
@@ -157,13 +176,13 @@ func (g *goalMachine) setStatePath(path string) {
 }
 
 // snapshot returns the fields Compose injects into outgoing turns.
-func (g *goalMachine) snapshot() (goal, status string) {
+func (g *goalMachine) snapshot() (goal, status string, researchSkippedByFact bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.disarmed && g.status == GoalStatusRunning {
-		return g.goal, GoalStatusStopped
+		return g.goal, GoalStatusStopped, g.researchSkippedByFact
 	}
-	return g.goal, g.status
+	return g.goal, g.status, g.researchSkippedByFact
 }
 
 func (g *goalMachine) goalText() string {
@@ -222,7 +241,7 @@ func (g *goalMachine) statusForDisplay() string {
 // the per-goal runtime counters, and returns the state to persist. ok is
 // false (no persistence) when the goal is unchanged or no state path is
 // configured.
-func (g *goalMachine) set(goal, preferredBudgetClass string) (string, []byte, bool) {
+func (g *goalMachine) set(goal, preferredBudgetClass string, researchSkippedByFact bool) (string, []byte, bool) {
 	goal = strings.TrimSpace(goal)
 	if goal != "" && preferredBudgetClass == "" {
 		preferredBudgetClass = ClassifyGoalBudget(goal)
@@ -231,8 +250,9 @@ func (g *goalMachine) set(goal, preferredBudgetClass string) (string, []byte, bo
 	defer g.mu.Unlock()
 	if goal != "" && g.goal == goal && g.status == GoalStatusRunning {
 		if !g.disarmed {
-			if g.budgetClass != preferredBudgetClass {
+			if g.budgetClass != preferredBudgetClass || g.researchSkippedByFact != researchSkippedByFact {
 				g.budgetClass = preferredBudgetClass
+				g.researchSkippedByFact = researchSkippedByFact
 				return g.buildStateLocked()
 			}
 			return "", nil, false
@@ -243,7 +263,7 @@ func (g *goalMachine) set(goal, preferredBudgetClass string) (string, []byte, bo
 		g.continuationEpoch++
 		return g.buildStateLocked()
 	}
-	g.installGoalLocked(goal, preferredBudgetClass)
+	g.installGoalLocked(goal, preferredBudgetClass, researchSkippedByFact)
 	return g.buildStateLocked()
 }
 
@@ -262,7 +282,7 @@ func (g *goalMachine) setLegacyArchiveBlockedWithTaskID(goal, preferredBudgetCla
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.installGoalLocked(goal, preferredBudgetClass)
+	g.installGoalLocked(goal, preferredBudgetClass, false)
 	if goal != "" {
 		g.status = GoalStatusBlocked
 	}
@@ -272,7 +292,7 @@ func (g *goalMachine) setLegacyArchiveBlockedWithTaskID(goal, preferredBudgetCla
 	return g.buildStateLocked()
 }
 
-func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string) {
+func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string, researchSkippedByFact bool) {
 	g.disarmed = false
 	g.continuationEpoch++
 	g.turnsUsed, g.tokensUsed, g.requestsUsed, g.noProgressTurns = 0, 0, 0, 0
@@ -289,6 +309,7 @@ func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string) {
 		g.noProgressLimit = 0
 		g.scopeID = ""
 		g.deliveryCheckpoint = evidence.DeliveryCheckpoint{}
+		g.researchSkippedByFact = false
 	} else {
 		g.goal, g.status = goal, GoalStatusRunning
 		g.scopeID = newGoalScopeID()
@@ -297,6 +318,7 @@ func (g *goalMachine) installGoalLocked(goal, preferredBudgetClass string) {
 		g.turnsLimit = unlimitedGoalTurns
 		g.tokensLimit = g.tokenBudget
 		g.noProgressLimit = 0
+		g.researchSkippedByFact = researchSkippedByFact
 	}
 	// Installing a normal Goal always abandons any pending legacy migration.
 	g.legacyTaskID = ""
@@ -409,13 +431,14 @@ func (g *goalMachine) eventState() ([]byte, bool) {
 
 func (g *goalMachine) marshalStateLocked() ([]byte, bool) {
 	state := goalState{
-		Goal:               g.goal,
-		Status:             g.status,
-		ScopeID:            g.scopeID,
-		DeliveryCheckpoint: g.deliveryCheckpoint,
-		Turns:              g.turnsUsed,
-		Block:              g.block,
-		Strict:             g.strict,
+		Goal:                  g.goal,
+		Status:                g.status,
+		ScopeID:               g.scopeID,
+		DeliveryCheckpoint:    g.deliveryCheckpoint,
+		Turns:                 g.turnsUsed,
+		Block:                 g.block,
+		Strict:                g.strict,
+		ResearchSkippedByFact: g.researchSkippedByFact,
 		// Todos is intentionally omitted. Legacy sidecars remain readable, but
 		// turn-local progress is never persisted with a Goal.
 		BudgetClass:            g.budgetClass,
@@ -515,6 +538,9 @@ func (g *goalMachine) restoreDecodedState(raw []byte, state goalState) legacyGoa
 	if g.status == "" {
 		g.status = GoalStatusStopped
 	}
+	// fact gate: persist the demotion decision across restarts so a
+	// running goal does not silently regain a research-class budget.
+	g.researchSkippedByFact = state.ResearchSkippedByFact
 	// Legacy task identity is migration-only compatibility data. It is returned to
 	// the Controller's archive boundary and retained in the machine only while a
 	// fail-closed migration remains pending.

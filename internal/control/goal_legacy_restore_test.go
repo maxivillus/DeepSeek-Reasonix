@@ -69,7 +69,7 @@ func TestGoalSidecarWriterFencesLegacyAutoResearchForEveryBudget(t *testing.T) {
 			dir := t.TempDir()
 			sessionPath := filepath.Join(dir, "session.jsonl")
 			g := &goalMachine{statePath: goalStatePath(sessionPath)}
-			path, raw, ok := g.set(tt.goal, tt.class)
+			path, raw, ok := g.set(tt.goal, tt.class, false)
 			if !ok {
 				t.Fatal("set did not produce sidecar data")
 			}
@@ -109,7 +109,7 @@ func TestGoalSidecarWriterFencesLegacyAutoResearchForEveryBudget(t *testing.T) {
 
 func TestEmptyGoalSidecarStillFencesLegacyAutoResearch(t *testing.T) {
 	g := &goalMachine{statePath: filepath.Join(t.TempDir(), "goal.json")}
-	_, raw, ok := g.set("", "")
+	_, raw, ok := g.set("", "", false)
 	if !ok {
 		t.Fatal("empty Goal did not produce stopped sidecar state")
 	}
@@ -124,13 +124,13 @@ func TestEmptyGoalSidecarStillFencesLegacyAutoResearch(t *testing.T) {
 
 func TestGoalSetIdempotencyUsesEffectiveBudgetClass(t *testing.T) {
 	g := &goalMachine{statePath: filepath.Join(t.TempDir(), "goal.json")}
-	if _, _, ok := g.set("same goal", budgetClassSimple); !ok {
+	if _, _, ok := g.set("same goal", budgetClassSimple, false); !ok {
 		t.Fatal("initial set did not persist")
 	}
-	if _, _, ok := g.set("same goal", budgetClassSimple); ok {
+	if _, _, ok := g.set("same goal", budgetClassSimple, false); ok {
 		t.Fatal("same Goal and budget class was not idempotent")
 	}
-	if _, _, ok := g.set("same goal", budgetClassResearch); !ok {
+	if _, _, ok := g.set("same goal", budgetClassResearch, false); !ok {
 		t.Fatal("budget class change was incorrectly treated as idempotent")
 	}
 	if g.budgetClass != budgetClassResearch || g.turnsLimit != unlimitedGoalTurns {
@@ -470,7 +470,7 @@ func TestStaleLegacyArchiveRetryCannotReplaceNewGoal(t *testing.T) {
 	if !ok {
 		t.Fatal("legacy archive block state unavailable")
 	}
-	g.set("new goal", budgetClassWrite)
+	g.set("new goal", budgetClassWrite, false)
 	if _, resumed := g.resumeLegacyArchive(epoch, "stale archive goal"); resumed {
 		t.Fatal("stale archive retry replaced a newer Goal")
 	}
@@ -481,9 +481,9 @@ func TestStaleLegacyArchiveRetryCannotReplaceNewGoal(t *testing.T) {
 
 func TestStaleInitialLegacyFailureCannotBlockNewGoal(t *testing.T) {
 	var g goalMachine
-	g.set("legacy goal", budgetClassResearch)
+	g.set("legacy goal", budgetClassResearch, false)
 	epoch := g.continuationToken()
-	g.set("new goal", budgetClassWrite)
+	g.set("new goal", budgetClassWrite, false)
 
 	if _, blocked := g.blockLegacyRestore(epoch, "archive disappeared"); blocked {
 		t.Fatal("stale archive failure blocked a newer Goal")
@@ -496,9 +496,9 @@ func TestStaleInitialLegacyFailureCannotBlockNewGoal(t *testing.T) {
 func TestStaleLegacyMigrationCannotRewriteNewGoalSidecar(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "goal.json")
 	g := &goalMachine{statePath: statePath}
-	g.set("legacy goal", budgetClassResearch)
+	g.set("legacy goal", budgetClassResearch, false)
 	legacyEpoch := g.continuationToken()
-	path, data, ok := g.set("new goal", budgetClassWrite)
+	path, data, ok := g.set("new goal", budgetClassWrite, false)
 	if !ok {
 		t.Fatal("new Goal did not build sidecar state")
 	}
