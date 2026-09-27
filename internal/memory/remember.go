@@ -122,7 +122,9 @@ func (t rememberTool) Execute(ctx context.Context, args json.RawMessage) (string
 		ExpiresAt:      expiresAt,
 		LastVerifiedAt: verifiedAt,
 		Keywords:       in.Keywords,
-		Body:           in.Body,
+		// Explicit model/user save: user-confirmed facts are high-trust.
+		Trust: TrustHigh,
+		Body:  in.Body,
 	}, SaveOptions{
 		ExpectedRevision:        in.ExpectedRevision,
 		RequireExpectedRevision: in.ExpectedRevision > 0,

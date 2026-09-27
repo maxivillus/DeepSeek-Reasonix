@@ -8,11 +8,25 @@ import (
 	"strings"
 )
 
+const (
+	// IndexMaxChars caps the provider-visible memory index so a growing
+	// store cannot bloat the cache-stable prompt prefix. The shared
+	// memory-mcp summarize_index applies the same budget (mcpIndexMaxChars).
+	IndexMaxChars = 4000
+	// indexDescMaxRunes clips each entry's description in the index; bodies
+	// never enter the prefix.
+	indexDescMaxRunes = 120
+)
+
 // Index returns the provider-visible index that loads into the cached
 // prefix: every active fact from both scopes with a scope-qualified
 // reference, shadowed global facts annotated rather than hidden — the index
 // agrees with the project-over-global rule recall enforces (#7995). The
 // per-directory MEMORY.md files keep their unqualified format.
+//
+// The index is bounded: freshest facts first (so the cap keeps what the
+// model is most likely to need), descriptions clipped, and the whole block
+// cut at a line boundary once it exceeds IndexMaxChars.
 func (s Store) Index() string {
 	memories := s.ListAll()
 	if len(memories) == 0 {
@@ -22,13 +36,18 @@ func (s Store) Index() string {
 	for _, o := range FindOverrides(memories) {
 		shadowed[o.Global.ID] = providerMemoryReference(o.Project)
 	}
-	sort.SliceStable(memories, func(i, j int) bool {
-		if memories[i].Name != memories[j].Name {
-			return memories[i].Name < memories[j].Name
+	// Freshest first: UpdatedAt, then CreatedAt, then name for determinism.
+	sort.Slice(memories, func(i, j int) bool {
+		a, b := memories[i], memories[j]
+		if !a.UpdatedAt.Equal(b.UpdatedAt) {
+			return a.UpdatedAt.After(b.UpdatedAt)
 		}
-		return NormalizeFactScope(string(memories[i].Scope)) == FactScopeProject
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.After(b.CreatedAt)
+		}
+		return a.Name < b.Name
 	})
-	var b strings.Builder
+	lines := make([]string, 0, len(memories))
 	seen := map[string]bool{} // collapse legacy migration duplicates (same qualified ref)
 	for _, memory := range memories {
 		if ref := providerMemoryReference(memory); seen[ref] {
@@ -36,14 +55,34 @@ func (s Store) Index() string {
 		} else {
 			seen[ref] = true
 		}
-		b.WriteString(renderQualifiedIndexLine(memory))
+		line := renderQualifiedIndexLine(memory)
 		if winner, ok := shadowed[memory.ID]; ok &&
 			NormalizeFactScope(string(memory.Scope)) == FactScopeGlobal {
-			b.WriteString(" (overridden by " + winner + ")")
+			line += " (overridden by " + winner + ")"
 		}
-		b.WriteString("\n")
+		lines = append(lines, line)
 	}
-	return b.String()
+	joined := strings.Join(lines, "\n") + "\n"
+	if r := []rune(joined); len(r) > IndexMaxChars {
+		cut := r[:IndexMaxChars]
+		// Cut at a line boundary so a partial line can never masquerade as a
+		// full entry or dangle an override annotation. The newline position
+		// must be counted in runes: strings.LastIndex reports a byte offset,
+		// and slicing a rune slice by a byte offset both mis-cuts multibyte
+		// text and — because r[:IndexMaxChars] retains the backing array's
+		// capacity — silently extends the cut past the cap.
+		lastNL := -1
+		for j, ch := range cut {
+			if ch == '\n' {
+				lastNL = j
+			}
+		}
+		if lastNL > 0 {
+			cut = cut[:lastNL]
+		}
+		joined = string(cut) + fmt.Sprintf("\n… (truncated %d chars)", len(r)-len(cut))
+	}
+	return joined
 }
 
 // renderQualifiedIndexLine is the provider-index variant of renderIndexLine:
@@ -57,5 +96,5 @@ func renderQualifiedIndexLine(m Memory) string {
 	ref := providerMemoryReference(m)
 	return fmt.Sprintf("- [%s](%s) — [%s/%s%s] %s",
 		displayTitle(m.Title, m.Name), ref,
-		NormalizeFactScope(string(m.Scope)), NormalizeType(string(m.Type)), marker, oneLine(m.Description))
+		NormalizeFactScope(string(m.Scope)), NormalizeType(string(m.Type)), marker, oneLine(clipRunes(m.Description, indexDescMaxRunes)))
 }

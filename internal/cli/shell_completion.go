@@ -127,6 +127,7 @@ func cliCompletionRootSpec() cliCompletionSpec {
 			completionSpec("telemetry", []cliCompletionFlag{help}),
 		),
 		completionSpec("init", []cliCompletionFlag{help}),
+		completionSpec("memory-extract", []cliCompletionFlag{help}),
 		completionSpec("acp", []cliCompletionFlag{
 			model,
 			completionFlag("--planner", cliCompletionStaticValue, "auto", "off"),

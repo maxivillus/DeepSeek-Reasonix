@@ -7,17 +7,22 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/text/transform"
 
 	fileenc "reasonix/internal/fileutil/encoding"
+	"reasonix/internal/imageopt"
 	"reasonix/internal/tool"
 )
 
@@ -26,6 +31,24 @@ const (
 	readFileDetectSample      = 256 * 1024 // bytes sampled for encoding detection before streaming
 	readFileMaxLineBytes      = 1024 * 1024
 	readFileMaxFormattedBytes = 8 << 20
+	// readImageMaxOutputBytes bounds the model-facing text of an image read
+	// (header). It sits under the agent's maxToolOutputBytes so the image
+	// transcript is never mangled by head+tail truncation.
+	readImageMaxOutputBytes = 30 * 1024
+)
+
+// Image knobs, mirroring jcode's env-controllable clamp:
+//   - REASONIX_IMAGE_JPEG_QUALITY — JPEG quality for re-encoding (default 80)
+//   - REASONIX_VISION_URL       — vision-proxy endpoint (POST /vision); если задан,
+//     read_file отправляет картинку туда и подмешивает текст/описание в вывод
+//     (DeepSeek без vision «видит» содержимое скриншота). Отключить: пустое значение.
+//   - REASONIX_VISION_TASK       — describe|document|complex|ocr (default document)
+//   - REASONIX_VISION_TIMEOUT    — таймаут vision-вызова, сек (default 120)
+const (
+	reasonixImageQualityEnv  = "REASONIX_IMAGE_JPEG_QUALITY"
+	reasonixVisionURLEnv     = "REASONIX_VISION_URL"
+	reasonixVisionTaskEnv    = "REASONIX_VISION_TASK"
+	reasonixVisionTimeoutEnv = "REASONIX_VISION_TIMEOUT"
 )
 
 func init() { tool.RegisterBuiltin(readFile{}) }
@@ -132,7 +155,7 @@ func readIntentFor(explicit string, windowGiven bool) (tool.ReadIntent, error) {
 func (readFile) Name() string { return "read_file" }
 
 func (readFile) Description() string {
-	return "Read one bounded text window with optional line offset/limit. Output prefixes each line with its 1-based number. Any successful window observes the current file version for later structured edits. Use the next-window hint to page only when more content is useful. Legacy intent and cursor fields are accepted as navigation hints and never create a whole-file completion requirement."
+	return "Read one bounded text window with optional line offset/limit. Output prefixes each line with its 1-based number. Any successful window observes the current file version for later structured edits. Use the next-window hint to page only when more content is useful. Legacy intent and cursor fields are accepted as navigation hints and never create a whole-file completion requirement. Raster images (PNG/JPEG/GIF/WebP) are handled specially: the image is clamped to 1568px and re-encoded as JPEG (quality 80)."
 }
 
 func (readFile) Schema() json.RawMessage {
@@ -316,6 +339,169 @@ func (r readFile) scanEncoded(f io.Reader, offset, limit int) (string, error) {
 		return r.scan(transform.NewReader(src, dec), offset, limit)
 	}
 	return r.scan(src, offset, limit)
+}
+
+// ExecuteWithImages extends Execute for raster images: it returns the same text
+// Execute would, but for image files the text carries the [image: …] placeholder,
+// a compression note, and an OCR transcript (so text-only models like DeepSeek
+// still see the on-screen content), while the clamped/re-encoded image is
+// returned as a data URL for vision-capable providers. Text files fall through
+// to Execute's behavior with no images, keeping the text path byte-identical.
+func (r readFile) ExecuteWithImages(ctx context.Context, args json.RawMessage) (string, []string, error) {
+	var p struct {
+		Path   string `json:"path"`
+		Offset int    `json:"offset,omitempty"`
+		Limit  int    `json:"limit,omitempty"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", nil, fmt.Errorf("invalid args: %w", err)
+	}
+	if p.Path == "" {
+		return "", nil, fmt.Errorf("path is required")
+	}
+	rp := resolveReadablePath(r.workDir, p.Path, r.paths)
+	p.Path = rp.Path
+	displayPath := rp.DisplayPath
+	if confineRead(r.forbidRoots, p.Path) {
+		err := &os.PathError{Op: "open", Path: p.Path, Err: os.ErrNotExist}
+		if rp.External {
+			return "", nil, fmt.Errorf("read %s: %s", displayPath, rp.ErrorText(err))
+		}
+		return "", nil, err
+	}
+	// Directories and the host overlay (unsaved editor buffers) are never
+	// images — let Execute produce its canonical messages for those.
+	if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
+		return "", nil, fmt.Errorf("%s is a directory, not a file — use the ls tool to list it, or read a specific file inside it", displayPath)
+	}
+	f, err := os.Open(p.Path)
+	if err != nil {
+		if rp.External {
+			return "", nil, fmt.Errorf("read %s: %s", displayPath, rp.ErrorText(err))
+		}
+		return "", nil, fmt.Errorf("read %s: %w", displayPath, err)
+	}
+	defer f.Close()
+
+	// Peek enough to sniff the format; raster images are handled here, anything
+	// else goes through the text pipeline below.
+	peek := make([]byte, readFileBinaryPeek)
+	pn, _ := io.ReadFull(f, peek)
+	peek = peek[:pn]
+	if mime := http.DetectContentType(peek); isRasterMime(mime) {
+		return r.readImage(ctx, displayPath, f, peek, mime)
+	}
+	text, err := r.Execute(ctx, args)
+	return text, nil, err
+}
+
+// readImage handles a raster image read: clamps/re-encodes via
+// imageopt.CompressForRead, appends a vision-proxy transcript (VLM/OCR) for
+// text-only models, and returns the compressed payload as a data URL.
+// Mirrors jcode's read-time clamp+vision so multica cards behave identically
+// across runtimes.
+func (r readFile) readImage(ctx context.Context, displayPath string, f *os.File, peek []byte, mime string) (string, []string, error) {
+	rest, err := io.ReadAll(f)
+	if err != nil {
+		return "", nil, fmt.Errorf("read %s: %w", displayPath, err)
+	}
+	raw := append(peek, rest...)
+	data, outMime, w, h := imageopt.CompressForRead(raw, mime, imageQuality())
+	img := "data:" + outMime + ";base64," + base64.StdEncoding.EncodeToString(data)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[image: %s] %s (%d×%d, %.1f KB", outMime, displayPath, w, h, float64(len(data))/1024)
+	if len(data) != len(raw) || outMime != mime {
+		fmt.Fprintf(&b, ", compressed from %.1f KB %s", float64(len(raw))/1024, mime)
+	}
+	b.WriteString(")\n")
+	if text := visionProbe(ctx, data); text != "" {
+		b.WriteString(text)
+	}
+	return truncateImageText(b.String()), []string{img}, nil
+}
+
+// visionProbe sends the (already clamped/re-encoded) image to the local
+// vision-proxy and returns a model-facing transcript. Best-effort: returns ""
+// when disabled or on any error (the read still succeeds).
+func visionProbe(ctx context.Context, data []byte) string {
+	url := strings.TrimSpace(os.Getenv(reasonixVisionURLEnv))
+	if url == "" {
+		return ""
+	}
+	task := strings.TrimSpace(os.Getenv(reasonixVisionTaskEnv))
+	if task == "" {
+		task = "document"
+	}
+	timeout := 120
+	if v := os.Getenv(reasonixVisionTimeoutEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			timeout = n
+		}
+	}
+	body, _ := json.Marshal(map[string]string{
+		"task":  task,
+		"image": base64.StdEncoding.EncodeToString(data),
+	})
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var out struct {
+		Text  string `json:"text"`
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return ""
+	}
+	if out.Text == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n[vision: %s]\n%s\n", orDefault(out.Model, task), strings.TrimSpace(out.Text))
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func imageQuality() int {
+	if q := os.Getenv(reasonixImageQualityEnv); q != "" {
+		if n, err := strconv.Atoi(q); err == nil {
+			return n
+		}
+	}
+	return 80
+}
+
+func isRasterMime(mime string) bool {
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	}
+	return false
+}
+
+func truncateImageText(s string) string {
+	if len(s) <= readImageMaxOutputBytes {
+		return s
+	}
+	head := s[:readImageMaxOutputBytes/2]
+	tail := s[len(s)-readImageMaxOutputBytes/4:]
+	return head + fmt.Sprintf("\n...[OCR text truncated: %d bytes total]...\n", len(s)) + tail
 }
 
 // scan reads lines from src and returns the formatted output with line numbers.

@@ -42,7 +42,7 @@ func goalRuntimeControllerWithTokenBudget(t *testing.T, prov provider.Provider, 
 
 func TestBudgetClassForBareFaultIsWrite(t *testing.T) {
 	// User-reported Chinese bare fault keeps its legacy compatibility class.
-	class := budgetClassForLegacyMode("数据模型管理器又出现历史 BUG 了……", GoalResearchAuto)
+	class := budgetClassForLegacyMode("数据模型管理器又出现历史 BUG 了……", GoalResearchAuto, false)
 	if class != budgetClassWrite {
 		t.Fatalf("budget class = %q, want write", class)
 	}
@@ -53,12 +53,12 @@ func TestBudgetClassForBareFaultIsWrite(t *testing.T) {
 		"诊断数据库连接失败原因。",
 		"复现并定位问题，但不要修复。",
 	} {
-		if got := budgetClassForLegacyMode(goal, GoalResearchAuto); got != budgetClassSimple {
+		if got := budgetClassForLegacyMode(goal, GoalResearchAuto, false); got != budgetClassSimple {
 			t.Errorf("budgetClassFor(%q) = %q, want simple", goal, got)
 		}
 	}
 	// Explicit mutation verbs remain write.
-	if got := budgetClassForLegacyMode("fix the crash in settings", GoalResearchAuto); got != budgetClassWrite {
+	if got := budgetClassForLegacyMode("fix the crash in settings", GoalResearchAuto, false); got != budgetClassWrite {
 		t.Fatalf("explicit fix class = %q, want write", got)
 	}
 }
