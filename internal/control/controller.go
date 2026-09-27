@@ -2689,12 +2689,26 @@ func (c *Controller) SetGoalDurable(goal string) error {
 		if current != nil && current.Objective == goal && current.Phase == goaldomain.PhaseActive && current.Activation == goaldomain.ActivationArmed {
 			return nil
 		}
+		// fact gate on the session-engine path. The new Goal runtime has no
+		// research budget class and never creates autoresearch tasks, so the round
+		// limit is the lever that keeps an autonomous run off ground a fresh memory
+		// fact already covers: enough rounds to answer from the fact and verify it,
+		// not a research-class loop.
+		researchSkippedByFact := c.factCoversGoal(goal, GoalResearchAuto)
+		var maxRoundLimit *uint64
+		if researchSkippedByFact {
+			limit := uint64(factGateRoundLimit)
+			maxRoundLimit = &limit
+		}
 		_, err = c.applyHostGoalMutation(context.Background(), "set", func(machine *goaldomain.Machine) (*goaldomain.View, error) {
-			created, createErr := machine.Replace(goaldomain.CreateRequest{Objective: goal})
+			created, createErr := machine.Replace(goaldomain.CreateRequest{Objective: goal, MaxGoalRounds: maxRoundLimit})
 			return &created, createErr
 		})
 		if err == nil {
 			c.resetGoalResourceBudget()
+			if researchSkippedByFact {
+				c.notice(fmt.Sprintf("autoresearch skipped: a fresh memory fact distinctively covers the goal; the autonomous loop is limited to %d rounds (raise it with /goal edit)", factGateRoundLimit))
+			}
 		}
 		return err
 	}
@@ -2792,6 +2806,11 @@ func (c *Controller) resolveGoalText(goal string, researchMode GoalResearchMode)
 	setup.budgetClass = budgetClassResearch
 	return legacy.goal, setup
 }
+
+// factGateRoundLimit bounds an autonomous Goal loop when the fact gate
+// fires on the session-engine path: enough rounds to answer from the covering
+// fact and verify it, far short of a research-class run. `/goal edit` lifts it.
+const factGateRoundLimit = 3
 
 // factGateApplies is the pure fact-gate decision (multica stack): heuristic
 // Auto research would engage AND a strong memory fact covers the goal. Explicit
