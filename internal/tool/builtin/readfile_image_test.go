@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,13 +36,38 @@ func writeTestPNG(t *testing.T, dir, name string, w, h int) string {
 	return path
 }
 
+// writeNoisyPNG renders a deterministic photo-like PNG (per-pixel noise): the
+// kind of raster that genuinely shrinks when re-encoded as JPEG.
+func writeNoisyPNG(t *testing.T, dir, name string, w, h int) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	rng := rand.New(rand.NewSource(42))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			base := uint8((x/8 + y/8) % 256)
+			jitter := uint8(rng.Intn(48))
+			img.Set(x, y, color.RGBA{base/2 + jitter, base + jitter/2, 255 - base, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("png encode: %v", err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
 func readImageTool(t *testing.T, path string) (string, []string, error) {
 	t.Helper()
 	r := readFile{workDir: t.TempDir()}
 	return r.ExecuteWithImages(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
 }
 
-func decodeDataURL(t *testing.T, dataURL string) (image.Config, string) {
+// dataURLBytes decodes a data URL into its payload and mime type.
+func dataURLBytes(t *testing.T, dataURL string) ([]byte, string) {
 	t.Helper()
 	rest, ok := strings.CutPrefix(dataURL, "data:")
 	if !ok {
@@ -53,6 +79,12 @@ func decodeDataURL(t *testing.T, dataURL string) (image.Config, string) {
 	if err != nil {
 		t.Fatalf("base64 decode: %v", err)
 	}
+	return raw, mime
+}
+
+func decodeDataURL(t *testing.T, dataURL string) (image.Config, string) {
+	t.Helper()
+	raw, mime := dataURLBytes(t, dataURL)
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("decode config: %v", err)
@@ -60,11 +92,11 @@ func decodeDataURL(t *testing.T, dataURL string) (image.Config, string) {
 	return cfg, mime
 }
 
-// An oversized screenshot must be clamped to 1568px and re-encoded as JPEG,
-// with the placeholder + compression note in the text.
+// An oversized photo-like raster must be clamped to 1568px and re-encoded as
+// JPEG, with the placeholder + compression note in the text.
 func TestReadFileImageOversizedCompressed(t *testing.T) {
 	dir := t.TempDir()
-	path := writeTestPNG(t, dir, "big.png", 2000, 1500)
+	path := writeNoisyPNG(t, dir, "big.png", 2000, 1500)
 
 	text, images, err := readImageTool(t, path)
 	if err != nil {
@@ -139,5 +171,35 @@ func TestReadFileImageEnvKnobs(t *testing.T) {
 	t.Setenv(reasonixImageQualityEnv, "not-a-number")
 	if q := imageQuality(); q != 80 {
 		t.Fatalf("imageQuality fallback: got %d, want 80", q)
+	}
+}
+
+// The payload must never grow. A flat, PNG-friendly capture (terminal/UI
+// screenshot) re-encodes larger as JPEG, so it is returned untouched even when
+// oversized — the clamp must not inflate the request.
+func TestReadFileImageFlatCaptureNotInflated(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestPNG(t, dir, "flat.png", 2000, 1500)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	text, images, err := readImageTool(t, path)
+	if err != nil {
+		t.Fatalf("ExecuteWithImages: %v", err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(images))
+	}
+	raw, mime := dataURLBytes(t, images[0])
+	if int64(len(raw)) > info.Size() {
+		t.Fatalf("payload grew: %d bytes from a %d byte file", len(raw), info.Size())
+	}
+	if mime != "image/png" {
+		t.Fatalf("flat capture should keep its original encoding, got %s", mime)
+	}
+	if strings.Contains(text, "compressed from") {
+		t.Fatalf("untouched image must not claim compression: %.100s", text)
 	}
 }

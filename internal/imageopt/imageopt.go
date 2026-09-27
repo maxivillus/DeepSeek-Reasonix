@@ -38,11 +38,12 @@ func CompressForVision(raw []byte, mime string) ([]byte, string) {
 // CompressForRead clamps a raster image to MaxVisionDim and re-encodes it for
 // agent read results (read_file). Unlike CompressForVision it always tries JPEG
 // (quality defaults to 80, overridable) so screenshots shrink hard. Oversized
-// images are always downscaled (the pixel/token budget is the point); the
-// original is kept only for already-small images whose JPEG re-encode would
-// inflate them (small logos, transparency-only PNGs). Returns the payload to
-// embed (with its mime), plus the encoded dimensions (0,0 when the image was
-// returned untouched after a decode failure).
+// images are downscaled unless the re-encode would be larger than the original
+// (flat PNG-friendly captures, small logos, transparency-only PNGs): the
+// payload never grows, and vision providers clamp resolution server-side
+// anyway. Returns the payload to embed (with its mime), plus the encoded
+// dimensions (0,0 when the image was returned untouched after a decode
+// failure).
 func CompressForRead(raw []byte, mime string, quality int) (data []byte, outMime string, w, h int) {
 	if quality <= 0 {
 		quality = 80
@@ -64,20 +65,22 @@ func CompressForRead(raw []byte, mime string, quality int) (data []byte, outMime
 		return raw, mime, 0, 0
 	}
 	w, h = cfg.Width, cfg.Height
-	scaled := false
 	if cfg.Width > MaxVisionDim || cfg.Height > MaxVisionDim {
 		w, h = scaledDims(cfg.Width, cfg.Height, MaxVisionDim)
 		dst := image.NewRGBA(image.Rect(0, 0, w, h))
 		xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), xdraw.Over, nil)
 		src = dst
-		scaled = true
 	}
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: quality}); err != nil {
 		return raw, mime, 0, 0
 	}
-	if !scaled && len(buf.Bytes()) >= len(raw) {
-		return raw, mime, cfg.Width, cfg.Height // re-encode would inflate — keep original
+	// Never ship a payload larger than the input: a resize is not a licence to
+	// inflate. Flat PNG-friendly sources (terminal and UI captures) re-encode
+	// larger as JPEG than they arrived, and the pixel budget is already enforced
+	// server-side by every vision provider, so the original stays the floor.
+	if len(buf.Bytes()) >= len(raw) {
+		return raw, mime, cfg.Width, cfg.Height
 	}
 	return buf.Bytes(), "image/jpeg", w, h
 }
