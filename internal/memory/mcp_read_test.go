@@ -53,8 +53,10 @@ func TestMCPRecallFacts(t *testing.T) {
 	if f.Trust != TrustHigh || f.Scope != FactScopeProject || f.Type != TypeProject {
 		t.Fatalf("fact mapping wrong: trust=%s scope=%s type=%s", f.Trust, f.Scope, f.Type)
 	}
-	if want := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC); !f.UpdatedAt.Equal(want) {
-		t.Fatalf("UpdatedAt = %v, want %v", f.UpdatedAt, want)
+	// The fixture reports the fact's own age as "now", so assert recency rather
+	// than a frozen date (a pinned date ages out of the fresh window).
+	if age := time.Since(f.UpdatedAt); age < 0 || age > time.Hour {
+		t.Fatalf("UpdatedAt = %v, want a run-relative timestamp", f.UpdatedAt)
 	}
 }
 
