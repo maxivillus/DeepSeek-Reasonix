@@ -128,9 +128,11 @@ func ExtractionPrompt() string {
 		"Transcript:\n"
 }
 
-// junkPatterns — грабли jcode (CONTENT-placeholder, ложные факты про токены).
+// junkPatterns — грабли jcode: ложные факты про отсутствующие сущности.
+// Голое слово "content" из списка убрано 2026-09-27: на реальном сторе оно
+// отбрасывало 11.6% настоящих фактов, ловя обычную лексику вроде
+// "content-type" или "static content cache", а не только плейсхолдер-ответ.
 var junkPatterns = []string{
-	"content",
 	"does not exist",
 	"not found",
 	"not present in the environment",

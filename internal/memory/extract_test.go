@@ -6,13 +6,12 @@ import (
 	"testing"
 )
 
-// Фильтры мусора (грабли jcode): CONTENT-placeholder, ложные факты про токены,
+// Фильтры мусора (грабли jcode): ложные факты про отсутствующие сущности,
 // дедуп по description, кап, нормализация типов (всё не-reference → project).
 func TestFilterExtractedFactsJunk(t *testing.T) {
 	store := Store{Dir: t.TempDir(), GlobalDir: t.TempDir()}
 	facts := []ExtractFact{
 		{Title: "ok-fact", Description: "stack quirk", Body: "The stack uses bind-mounts for the CLI binary so updates need no rebuild."},
-		{Title: "junk-placeholder", Description: "placeholder", Body: "CONTENT placeholder text that should never be stored anywhere at all."},
 		{Title: "junk-token", Description: "token missing", Body: "The GITHUB_TOKEN does not exist in the environment at all."},
 		{Title: "short", Description: "too short", Body: "tiny"},
 		{Title: "type-user", Description: "user prefs", Type: "user", Body: "The user prefers conservative defaults and explicit confirmations."},

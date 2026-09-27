@@ -13,6 +13,11 @@ import (
 	"syscall"
 )
 
+// memoryExtractSpawn is the Close-time seam. Tests replace it to assert the
+// session-end trigger stays wired: the call site was silently lost in a rebase
+// once already, and nothing else would have noticed.
+var memoryExtractSpawn = spawnMemoryExtract
+
 func spawnMemoryExtract(sessionPath, workspaceRoot string) {
 	if os.Getenv("REASONIX_MEMORY_EXTRACT") != "1" {
 		return

@@ -288,6 +288,11 @@ type Controller struct {
 	// surfaced to frontends via WorkspaceRoot().
 	workspaceRoot string
 
+	// incrementalStop cancels the mid-session memory-extraction ticker (Фаза B,
+	// 2026-08-11): started from New() once the session path is known, stopped in
+	// close(). Nil when extraction is disabled or the ticker never started.
+	incrementalStop context.CancelFunc
+
 	// externalFolderRefs maps session-generated @ tokens to user-dropped
 	// directories outside workspaceRoot. It is intentionally per-controller:
 	// dragging a folder authorizes that folder for this chat session only, without
@@ -908,6 +913,14 @@ func (c *Controller) initializeOwnedResources(opts Options) {
 	// Checkpoints: bind a store to the session and route writer pre-edits into it.
 	c.rebindCheckpoints(opts.SessionPath)
 	c.setActiveJobSession(opts.SessionPath)
+	// Фаза B (2026-08-11): инкрементальная экстракция памяти во время сессии.
+	// Env-gated (REASONIX_MEMORY_EXTRACT=1) inside the starter; the ticker reads
+	// the transcript only, so starting it here is safe.
+	if opts.SessionPath != "" {
+		incCtx, incCancel := context.WithCancel(context.Background())
+		c.incrementalStop = incCancel
+		c.startIncrementalExtraction(incCtx)
+	}
 	c.rebindInbox()
 	// Observe Steer / unapplied-steer for durable inbox state transitions.
 	// Must wrap both the controller sink and the executor sink: agent.Steer
@@ -5078,6 +5091,12 @@ func (c *Controller) finalizeControllerClose() {
 		if fireSessionEnd && started {
 			c.hooks.SessionEnd(context.Background(), "other")
 			c.extensionSessionEvent(extension.PointSessionEnd, dispatch.PhaseEnd, c.SessionPath())
+			// Фаза A (2026-08-11): авто-экстракция памяти в child-процессе.
+			memoryExtractSpawn(c.SessionPath(), c.workspaceRoot)
+		}
+		// Фаза B (2026-08-11): остановить инкрементальный тикер до выхода.
+		if c.incrementalStop != nil {
+			c.incrementalStop()
 		}
 		if c.background.scope != nil {
 			c.background.scope.Release(jobsMode == closeJobsAsync)
