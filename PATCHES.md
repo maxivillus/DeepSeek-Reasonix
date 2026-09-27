@@ -11,9 +11,12 @@
 ## Отличия переноса на v1.39.1
 
 - Общая логика сжатия изображений вынесена в `internal/imageopt`; `internal/control/imagecompress.go` оставлен как тонкая обёртка, чтобы тесты `control` не переписывать.
+- `CompressForRead` никогда не отдаёт полезную нагрузку больше исходной: защита от роста больше не зависит от того, масштабировалось ли изображение. Плоские PNG-дружелюбные снимки (терминал, UI) возвращаются как есть — провайдер всё равно ограничивает разрешение на своей стороне.
 - Полный автомат Goal (`goalAdvanceInput`, `advance`, `admitContinuation`, `goalContinuationSnapshot`) в upstream удалён, поэтому перенесены только `researchSkippedByFact` в `goalMachine` (`set`, `installGoalLocked`, `snapshot`, sidecar) и сам fact gate в `Controller`.
-- В `runOrchestratedTurn` upstream перешёл на `ComposeSynthetic` для goal-round и больше не подмешивает блок active-goal. Поэтому model-facing пометка fact gate (`factGateGoalMarker`) остаётся только на пути `compose()`/`activeGoalBlock`; notice пользователю сохраняется в `Controller`.
-- `reasonix --version` показывает базу `v1.39.1` плюс локальный коммит.
+- Fact gate срабатывает и на пути session engine: у нового runtime нет класса бюджета research и он не создаёт autoresearch-задач, поэтому рычагом стал лимит раундов. Покрытая свежим фактом цель создаётся с `MaxGoalRounds = factGateRoundLimit` (3) и notice; непокрытая — с неограниченным циклом; поднять лимит можно через `/goal edit`.
+- В `runOrchestratedTurn` upstream перешёл на `ComposeSynthetic` для goal-round и больше не подмешивает блок active-goal. Поэтому model-facing пометка fact gate (`factGateGoalMarker`) остаётся только на пути `compose()`/`activeGoalBlock`; на engine-пути пользователь получает notice, а не пометку в промпте.
+- golden baseline `internal/boot/testdata/golden/` перегенерирован: описание `read_file` содержит локальное предложение про растры (`ToolsHash`/`PrefixHash` меняются один раз).
+- `reasonix --version` показывает базу `v1.39.1` плюс локальные коммиты.
 
 ## Режимы
 
