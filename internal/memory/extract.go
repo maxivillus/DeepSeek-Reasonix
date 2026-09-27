@@ -255,7 +255,7 @@ func ExtractFactName(f ExtractFact) string { return slug(firstNonEmpty(f.Title, 
 // вариативен: 0 vs 8 фактов на одном и том же транскрипте).
 func ExtractWithProvider(ctx context.Context, p provider.Provider, transcript string) []ExtractFact {
 	var raw string
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		if attempt > 0 {
 			time.Sleep(2 * time.Second)
 		}

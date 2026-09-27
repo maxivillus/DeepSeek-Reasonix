@@ -19,9 +19,9 @@ import (
 func writeTestPNG(t *testing.T, dir, name string, w, h int) string {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for x := 0; x < w; x++ {
+	for x := range w {
 		c := color.RGBA{uint8(x % 256), 200, 128, 255}
-		for y := 0; y < h; y++ {
+		for y := range h {
 			img.Set(x, y, c)
 		}
 	}
@@ -42,8 +42,8 @@ func writeNoisyPNG(t *testing.T, dir, name string, w, h int) string {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	rng := rand.New(rand.NewSource(42))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			base := uint8((x/8 + y/8) % 256)
 			jitter := uint8(rng.Intn(48))
 			img.Set(x, y, color.RGBA{base/2 + jitter, base + jitter/2, 255 - base, 255})

@@ -133,15 +133,7 @@ func compress(raw []byte, mime string, quality int) ([]byte, string, int, int) {
 // aspect ratio (each side at least 1px).
 func scaledDims(w, h, m int) (int, int) {
 	if w >= h {
-		nh := h * m / w
-		if nh < 1 {
-			nh = 1
-		}
-		return m, nh
+		return m, max(1, h*m/w)
 	}
-	nw := w * m / h
-	if nw < 1 {
-		nw = 1
-	}
-	return nw, m
+	return max(1, w*m/h), m
 }

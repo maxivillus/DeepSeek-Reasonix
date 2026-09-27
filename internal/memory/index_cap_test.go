@@ -15,7 +15,7 @@ func TestIndexCapBoundAndMarker(t *testing.T) {
 	// Multibyte description (Cyrillic, 2 bytes/rune): the line-boundary cut
 	// must count positions in runes, not bytes.
 	desc := strings.Repeat("д", 200) // longer than the 120-rune clip
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		at := base.Add(time.Duration(i) * time.Minute)
 		recallTestWrite(t, store.Dir, Memory{
 			ID:          "mem-" + strings.Repeat("x", i) + string(rune('a'+i%26)),
