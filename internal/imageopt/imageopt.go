@@ -26,6 +26,14 @@ const MaxVisionDim = 1568
 // bounded by the file cap).
 const maxDecodePixels = 50_000_000
 
+// decodeBomb reports whether the declared dimensions exceed the decode budget.
+// The product is computed in int64 on purpose: int is 32 bits on 32-bit targets,
+// where width*height overflows to a negative value and a decompression bomb
+// would slip past the guard.
+func decodeBomb(width, height int) bool {
+	return int64(width)*int64(height) > int64(maxDecodePixels)
+}
+
 // CompressForVision downscales an oversized image to MaxVisionDim and re-encodes
 // it — PNG/GIF stay lossless (screenshots, text, transparency), JPEG/WebP go to
 // JPEG. Best-effort: an undecodable format, a decode/encode failure, or an image
@@ -57,7 +65,7 @@ func CompressForRead(raw []byte, mime string, quality int) (data []byte, outMime
 		return raw, mime, 0, 0 // bmp/tiff/svg: no decoder wired, send original
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil || cfg.Width*cfg.Height > maxDecodePixels {
+	if err != nil || decodeBomb(cfg.Width, cfg.Height) {
 		return raw, mime, 0, 0
 	}
 	src, _, err := image.Decode(bytes.NewReader(raw))
@@ -95,7 +103,7 @@ func compress(raw []byte, mime string, quality int) ([]byte, string, int, int) {
 		return raw, mime, 0, 0 // bmp/tiff/svg: no decoder wired, send original
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil || cfg.Width*cfg.Height > maxDecodePixels {
+	if err != nil || decodeBomb(cfg.Width, cfg.Height) {
 		return raw, mime, 0, 0
 	}
 	if cfg.Width <= MaxVisionDim && cfg.Height <= MaxVisionDim {
