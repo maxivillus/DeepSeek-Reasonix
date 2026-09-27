@@ -149,8 +149,7 @@ func RunWithBuildInfo(args []string, info BuildInfo) int {
 		configureCLIThemeFromConfig()
 		return acpCommand(rest, version)
 	case "memory-extract":
-		// Скрытая команда авто-экстракции памяти (Фаза A, 2026-08-11):
-		// вызывается child-процессом из Controller.Close.
+		// Hidden child command spawned by Controller.Close.
 		return memoryExtractCommand(rest)
 	case "mcp":
 		configureCLIThemeFromConfig()

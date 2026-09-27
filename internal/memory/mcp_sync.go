@@ -1,19 +1,8 @@
 package memory
 
-// mcp_sync.go — dual-write авто-извлечённых фактов в общий memory-mcp
-// (SQLite+FTS5; сервер: github.com/maxivillus/memory-mcp).
-//
-// Фаза 2 (2026-08-15): нативная запись остаётся (Store.SaveWithOptions),
-// параллельно факты пишутся в memory-mcp (shared store, кросс-рантайм).
-//
-// Включение: REASONIX_MEMORY_MCP=1 (иначе всё — no-op).
-//   MEMORY_MCP_CMD — команда сервера (default "memory-mcp" из PATH)
-//   MEMORY_MCP_DB  — путь БД (default ~/.local/share/memory-mcp/facts.db;
-//                    XDG-стиль, без хостовых путей; в рантаймах стека
-//                    задаётся явно — общая БД через bind-mount).
-//
-// Запись best-effort: при любой ошибке — stderr + return error; вызывающие
-// игнорируют (нативная запись уже выполнена, MCP-синк не блокирует экстракцию).
+// Dual-write of extracted facts into the shared memory-mcp store
+// (REASONIX_MEMORY_MCP=1, MEMORY_MCP_CMD/DB select the helper and database).
+// Best-effort: a failing helper never blocks the native write.
 
 import (
 	"bufio"

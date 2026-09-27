@@ -83,10 +83,9 @@ func CompressForRead(raw []byte, mime string, quality int) (data []byte, outMime
 	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: quality}); err != nil {
 		return raw, mime, 0, 0
 	}
-	// Never ship a payload larger than the input: a resize is not a licence to
-	// inflate. Flat PNG-friendly sources (terminal and UI captures) re-encode
-	// larger as JPEG than they arrived, and the pixel budget is already enforced
-	// server-side by every vision provider, so the original stays the floor.
+	// Never ship a payload larger than the input: flat PNG-friendly captures
+	// re-encode larger as JPEG, and vision providers clamp resolution
+	// server-side anyway, so the original stays the floor.
 	if len(buf.Bytes()) >= len(raw) {
 		return raw, mime, cfg.Width, cfg.Height
 	}

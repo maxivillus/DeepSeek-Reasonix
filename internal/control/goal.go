@@ -57,10 +57,9 @@ func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode, resear
 		}
 		return budgetClassSimple
 	default:
-		// fact gate (multica stack): heuristic Auto research is demoted to a
-		// write budget when a fresh distinctive memory fact covers the goal, so
-		// the run does not burn a research-class turn budget on already-known
-		// ground. Explicit --research is never gated.
+		// fact gate: heuristic Auto research is demoted to a write budget when a
+		// fresh distinctive fact covers the goal; explicit --research is never
+		// gated.
 		if researchSkippedByFact {
 			if GoalNeedsWriteBudget(goal) {
 				return budgetClassWrite
@@ -69,6 +68,14 @@ func budgetClassForLegacyMode(goal string, researchMode GoalResearchMode, resear
 		}
 		return ClassifyGoalBudget(goal)
 	}
+}
+
+// goalPolicyState holds the goal's independent booleans: strict mode and the
+// fact-gate demotion of heuristic Auto research (see factCoversGoal), which
+// share a lifetime and are only meaningful together.
+type goalPolicyState struct {
+	strict                bool
+	researchSkippedByFact bool
 }
 
 // goalMachine owns the active goal FSM and its persistence. It is a strict
@@ -83,12 +90,10 @@ type goalMachine struct {
 	scopeID            string
 	deliveryCheckpoint evidence.DeliveryCheckpoint
 	block              string
-	strict             bool
-	// researchSkippedByFact persists the fact-gate decision: the goal's
-	// heuristic Auto research was demoted because a fresh, distinctively
-	// matching memory fact covers it (see factCoversGoal).
-	researchSkippedByFact bool
-	continuationEpoch     uint64
+	// goalPolicyState carries the goal's independent booleans. Grouping them by
+	// lifetime keeps the machine's scalar state countable.
+	goalPolicyState
+	continuationEpoch uint64
 
 	tokenBudget int // configured ceiling for an unattended loop; 0 = unbounded
 
@@ -114,10 +119,9 @@ type goalMachine struct {
 	// stateExtra preserves fields written by a newer peer during read/modify/
 	// write cycles. Known current fields always win on serialization.
 	stateExtra map[string]json.RawMessage
-	// legacyTaskID is retained only while a historical AutoResearch archive is
-	// awaiting migration. It is serialized on fail-closed blocked sidecars so a
-	// restart can retry the migration without treating the raw archive path as a
-	// new Goal.
+	// legacyTaskID is retained only while a historical AutoResearch archive
+	// awaits migration; fail-closed blocked sidecars serialize it so a restart
+	// can retry the migration.
 	legacyTaskID string
 
 	// statePath is the persisted goal-state sidecar; empty disables persistence.

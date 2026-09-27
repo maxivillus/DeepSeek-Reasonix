@@ -1,9 +1,6 @@
 package cli
 
-// memory-extract — скрытая команда авто-экстракции памяти (Фаза A, 2026-08-11).
-// Вызывается как child-процесс из Controller.Close (internal/control) и
-// переживает выход родителя: читает транскрипт сессии, дёргает LLM-sidecar,
-// фильтрует мусор и сохраняет факты через штатный memory.Store.
+// memory-extract: hidden child extracting durable facts from a session.
 //
 //	reasonix memory-extract --session <stem> --dir <workspace> [--model REF] [--mode project|global|duplicate]
 

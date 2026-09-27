@@ -65,12 +65,9 @@ func (s Store) Index() string {
 	joined := strings.Join(lines, "\n") + "\n"
 	if r := []rune(joined); len(r) > IndexMaxChars {
 		cut := r[:IndexMaxChars]
-		// Cut at a line boundary so a partial line can never masquerade as a
-		// full entry or dangle an override annotation. The newline position
-		// must be counted in runes: strings.LastIndex reports a byte offset,
-		// and slicing a rune slice by a byte offset both mis-cuts multibyte
-		// text and — because r[:IndexMaxChars] retains the backing array's
-		// capacity — silently extends the cut past the cap.
+		// Cut at a line boundary, counting in runes: a byte offset would
+		// mis-cut multibyte text and a partial line could dangle an override
+		// annotation.
 		lastNL := -1
 		for j, ch := range cut {
 			if ch == '\n' {

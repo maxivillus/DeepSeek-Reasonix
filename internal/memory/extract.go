@@ -1,14 +1,8 @@
 package memory
 
-// Auto-extraction (Phase A, 2026-08-11) — «память между сессиями» в стиле
-// jcode (JCODE_MEMORY_GLOBAL_WRITE): по концу сессии child-процесс
-// `reasonix memory-extract` извлекает durable-факты из транскрипта через
-// LLM-sidecar и сохраняет их через штатный Store (та же точка, что
-// remember-инструмент): ревизии, скоупы, индекс — без ручных write.
-//
-// Решения пользователя (2026-08-11): авто-экстракция пишет ТОЛЬКО
-// project/reference (user/feedback — только явный remember агента);
-// global-write управляется env REASONIX_MEMORY_GLOBAL_WRITE.
+// Auto-extraction (memory between sessions): `reasonix memory-extract` reads a
+// session transcript, asks a sidecar LLM for durable facts and saves them
+// through Store, so revisions, scopes and the index come for free.
 
 import (
 	"bufio"

@@ -1,11 +1,8 @@
 package control
 
-// Фаза A (2026-08-11): авто-экстракция памяти по концу сессии. В
-// Controller.Close после SessionEnd-хуков детачим child-процесс
-// `reasonix memory-extract --session … --dir …`, который переживает выход
-// родителя: читает транскрипт, дёргает LLM-sidecar и сохраняет факты через
-// штатный memory.Store. Включение: env REASONIX_MEMORY_EXTRACT=1 (compose
-// reasonix-daemon/multica-worker).
+// Close() spawns `reasonix memory-extract` detached after the SessionEnd hooks,
+// so extraction outlives the parent. Enabled by REASONIX_MEMORY_EXTRACT=1; the
+// child reads the transcript and stores facts through the normal memory.Store.
 
 import (
 	"os"

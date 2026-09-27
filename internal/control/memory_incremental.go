@@ -1,14 +1,8 @@
 package control
 
-// Фаза B (2026-08-11): инкрементальная экстракция памяти ВО ВРЕМЯ сессии +
-// рефид. Каждые REASONIX_MEMORY_INCREMENTAL_MINUTES минут (default 15)
-// обрабатывается НОВЫЙ сегмент транскрипта (вырос ≥ REASONIX_MEMORY_INCREMENTAL_MIN,
-// default 8k символов) — факты сохраняются через memoryManager.saveMemory:
-//   - заметка «Saved memory …» уходит в очередь → следующий ход модели её видит
-//     (рефид, не трогая cache-stable префикс);
-//   - новые факты сразу доступны встроенному auto-recall (focused-query retrieval).
-// Мастер-выключатель — тот же REASONIX_MEMORY_EXTRACT=1; INCREMENTAL_MINUTES=0
-// отключает инкрементальную часть (session-end экстракция остаётся).
+// Mid-session extraction ticker (REASONIX_MEMORY_EXTRACT=1): every
+// REASONIX_MEMORY_INCREMENTAL_MINUTES (default 15) the newest transcript segment
+// of >= REASONIX_MEMORY_INCREMENTAL_MIN chars is extracted and saved.
 
 import (
 	"context"

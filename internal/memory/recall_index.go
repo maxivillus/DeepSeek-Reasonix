@@ -41,10 +41,9 @@ func (s *Set) AutoRecall(query string, opts RecallOptions) RecallResult {
 		result.Suppressed = "memory store is empty"
 		return result
 	}
-	// Server-side recall assembly (REASONIX_MEMORY_MCP_COMPOSE=1): the shared
-	// store's compose_recall builds the whole block (RRF lexical+semantic+
-	// graph, session expansion, tiers) — one scoring pipeline for every
-	// runtime. Best-effort: any failure falls through to the native path.
+	// REASONIX_MEMORY_MCP_COMPOSE=1: the shared store assembles the whole block
+	// (RRF lexical+semantic+graph) so every runtime scores the same way.
+	// Best-effort: any failure falls through to the native path.
 	if mcpComposeEnabled() {
 		ctx, cancel := context.WithTimeout(context.Background(), mcpReadTimeout)
 		defer cancel()

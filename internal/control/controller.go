@@ -2702,11 +2702,9 @@ func (c *Controller) SetGoalDurable(goal string) error {
 		if current != nil && current.Objective == goal && current.Phase == goaldomain.PhaseActive && current.Activation == goaldomain.ActivationArmed {
 			return nil
 		}
-		// fact gate on the session-engine path. The new Goal runtime has no
-		// research budget class and never creates autoresearch tasks, so the round
-		// limit is the lever that keeps an autonomous run off ground a fresh memory
-		// fact already covers: enough rounds to answer from the fact and verify it,
-		// not a research-class loop.
+		// fact gate: a fresh fact that covers the goal bounds the autonomous
+		// loop instead of the old research budget — the new runtime has no
+		// budget class and never creates autoresearch tasks.
 		researchSkippedByFact := c.factCoversGoal(goal, GoalResearchAuto)
 		var maxRoundLimit *uint64
 		if researchSkippedByFact {

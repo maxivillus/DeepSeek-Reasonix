@@ -65,11 +65,9 @@ func Load(opts Options) *Set {
 		InstructionDiagnostics: resolved.Diagnostics,
 		recall:                 BuildRecallIndex(store),
 	}
-	// Shared cross-runtime memory (memory-mcp): when the store is enabled, the
-	// prefix index is the capped summarize_index over the shared store instead
-	// of the native index — same facts plus facts written by other runtimes,
-	// bounded by the server's 4000-char cap (the native index is itself capped
-	// at IndexMaxChars). Best-effort: on any failure the native index stays.
+	// With memory-mcp enabled the prefix index is the shared store's capped
+	// summarize_index instead of the native one — same facts plus other
+	// runtimes'. Best-effort: on any failure the native index stays.
 	if mcpSyncEnabled() {
 		ctx, cancel := context.WithTimeout(context.Background(), mcpReadTimeout)
 		defer cancel()

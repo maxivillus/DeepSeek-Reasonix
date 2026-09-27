@@ -1,10 +1,8 @@
 package memory
 
-// mcp_read.go — чтение общего memory-mcp store (кросс-рантайм память, Фаза А
-// шаг (а)): префикс-индекс через summarize_index (кап 4000 символов) и
-// per-turn реколл через search_facts. Работает при том же флаге, что и
-// dual-write (REASONIX_MEMORY_MCP=1); чтение best-effort — при любой ошибке
-// вызывающие молча возвращаются к нативной памяти (fallback).
+// Reads the shared memory-mcp store (REASONIX_MEMORY_MCP=1): a capped
+// summarize_index for the prefix and a per-turn search_facts recall, both
+// best-effort — failures fall back to the native memory.
 
 import (
 	"context"
