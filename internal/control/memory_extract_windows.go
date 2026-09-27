@@ -4,15 +4,13 @@ package control
 
 import (
 	"os/exec"
-	"syscall"
 
 	"reasonix/internal/proc"
 )
 
-// detachMemoryExtract gives the child its own process group so the parent's
-// exit does not take it down, and keeps it from flashing a console window.
-// Windows has no setsid; CREATE_NEW_PROCESS_GROUP is the closest equivalent.
-func detachMemoryExtract(cmd *exec.Cmd) {
-	proc.HideWindow(cmd)
-	cmd.SysProcAttr.CreationFlags |= syscall.CREATE_NEW_PROCESS_GROUP
+// memoryExtractCommand builds the detached child command. proc.Command keeps the
+// child's console hidden, and a Windows child does not die with its parent, so
+// no extra detachment flag is needed.
+func memoryExtractCommand(exe string, args []string) *exec.Cmd {
+	return proc.Command(exe, args...)
 }

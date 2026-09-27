@@ -9,7 +9,6 @@ package control
 
 import (
 	"os"
-	"os/exec"
 )
 
 // memoryExtractSpawn is the Close-time seam. Tests replace it to assert the
@@ -28,10 +27,9 @@ func spawnMemoryExtract(sessionPath, workspaceRoot string) {
 	if err != nil {
 		return
 	}
-	cmd := exec.Command(exe, "memory-extract", "--session", sessionPath, "--dir", workspaceRoot)
-	// Detach the child from this process and its terminal. How that is spelled
-	// out is platform-specific — see detachMemoryExtract.
-	detachMemoryExtract(cmd)
+	// Construction and detachment are platform-specific: see
+	// memoryExtractCommand in memory_extract_other.go / _windows.go.
+	cmd := memoryExtractCommand(exe, []string{"memory-extract", "--session", sessionPath, "--dir", workspaceRoot})
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil

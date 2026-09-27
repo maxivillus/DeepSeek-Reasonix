@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"reasonix/internal/proc"
 )
 
 const (
@@ -130,7 +132,10 @@ func startMCPSession(ctx context.Context) (*mcpSession, error) {
 	if db == "" {
 		db = mcpDefaultDB()
 	}
-	cmd := exec.CommandContext(ctx, cmdStr)
+	// proc.CommandContext keeps the helper's console hidden on Windows; the
+	// background-process gate requires every spawn outside internal/proc to go
+	// through these constructors.
+	cmd := proc.CommandContext(ctx, cmdStr)
 	cmd.Env = append(os.Environ(), "MEMORY_MCP_DB="+db)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
