@@ -62,8 +62,22 @@ func writeNoisyPNG(t *testing.T, dir, name string, w, h int) string {
 
 func readImageTool(t *testing.T, path string) (string, []string, error) {
 	t.Helper()
+	// Marshal the path: a hand-built JSON string breaks on Windows, where the
+	// separator is a backslash and "\U" is not a valid escape.
+	args, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
 	r := readFile{workDir: t.TempDir()}
-	return r.ExecuteWithImages(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	return r.ExecuteWithImages(context.Background(), json.RawMessage(args))
+}
+
+// A Windows-style path must reach the tool as a path, never as malformed JSON.
+func TestReadImageToolAcceptsBackslashPath(t *testing.T) {
+	_, _, err := readImageTool(t, `C:\Temp\shot.png`)
+	if err == nil || strings.Contains(err.Error(), "invalid args") {
+		t.Fatalf("backslash path produced an argument error: %v", err)
+	}
 }
 
 // dataURLBytes decodes a data URL into its payload and mime type.
